@@ -78,6 +78,7 @@ class AgentController:
     def apply_to_all(self):
         """Copy this agent's reward settings to all other agents"""
         if not self.manager:
+            self.log("Warning: No manager reference, cannot apply to all")
             return
         
         # Get current values
@@ -348,9 +349,11 @@ def command_listener(agents, port=10001):
                         if len(parts) == 2:
                             player_name = parts[0]
                             agent_id = int(parts[1])
-                            # Find agent by ID (agent_id corresponds to port offset)
+                            # Calculate port from agent_id (same logic as client)
+                            port = (9999 if agent_id == 1 else 10000)
+                            # Find agent by port
                             for ag in agents:
-                                if ag.port == 9999 + agent_id - 1:
+                                if ag.port == port:
                                     ag.player_name = player_name
                                     ag.agent_id = agent_id
                                     ag.log(f'>>> MAPPED: {player_name} -> Agent {agent_id}')
@@ -406,7 +409,11 @@ class AgentManager:
     
     def add_agent(self):
         agent_num = len(self.agents) + 1
-        port = 9999 + len(self.agents)
+        # Calculate port, skipping 10001 (reserved for command port)
+        index = len(self.agents)
+        port = 9999 + index
+        if port >= 10001:
+            port += 1  # Skip 10001
         name = f"Agent {agent_num}"
         agent = AgentController(self.agent_frame, name, port, manager=self)
         self.agents.append(agent)
