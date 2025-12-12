@@ -30,6 +30,8 @@ class AgentController:
         self.damage_dealt = self.create_input(config_frame, "Dmg Dealt:", "10.0")
         self.damage_taken = self.create_input(config_frame, "Dmg Taken:", "-10.0")
         self.time_penalty = self.create_input(config_frame, "Time:", "-0.1")
+        self.team_hit_penalty = self.create_input(config_frame, "Team Hit:", "-50.0")
+        self.team_kill_penalty = self.create_input(config_frame, "Team Kill:", "-500.0")
 
         # Controls
         btn_frame = ttk.Frame(self.frame)
@@ -40,6 +42,9 @@ class AgentController:
         
         self.stop_btn = ttk.Button(btn_frame, text="Stop", command=self.stop, state="disabled")
         self.stop_btn.pack(side="left", padx=5)
+        
+        # Store parent reference for "Apply to All" functionality
+        self.parent_manager = None
 
         # Status
         self.status_var = tk.StringVar(value="Status: Stopped")
@@ -49,6 +54,9 @@ class AgentController:
         self.reward_var = tk.StringVar(value="Reward: 0.0")
         ttk.Label(self.frame, textvariable=self.reward_var, font=("Arial", 12, "bold")).pack(pady=5)
         self.total_reward = 0.0
+        
+        # Agent-player mapping
+        self.mapped_players = set()  # Set of player names mapped to this agent
 
         self.log_text = tk.Text(self.frame, height=15, width=30, state="disabled")
         self.log_text.pack(padx=5, pady=5, fill="both", expand=True)
@@ -66,6 +74,28 @@ class AgentController:
         self.log_text.insert("end", msg + "\n")
         self.log_text.see("end")
         self.log_text.config(state="disabled")
+    
+    def get_reward_config(self):
+        """Get current reward configuration as dict"""
+        return {
+            'win_reward': self.win_reward.get(),
+            'loss_penalty': self.loss_penalty.get(),
+            'damage_dealt': self.damage_dealt.get(),
+            'damage_taken': self.damage_taken.get(),
+            'time_penalty': self.time_penalty.get(),
+            'team_hit_penalty': self.team_hit_penalty.get(),
+            'team_kill_penalty': self.team_kill_penalty.get()
+        }
+    
+    def set_reward_config(self, config):
+        """Set reward configuration from dict"""
+        self.win_reward.set(config['win_reward'])
+        self.loss_penalty.set(config['loss_penalty'])
+        self.damage_dealt.set(config['damage_dealt'])
+        self.damage_taken.set(config['damage_taken'])
+        self.time_penalty.set(config['time_penalty'])
+        self.team_hit_penalty.set(config['team_hit_penalty'])
+        self.team_kill_penalty.set(config['team_kill_penalty'])
 
     def start(self):
         if self.running: return
@@ -134,6 +164,16 @@ class AgentController:
                 # Check for server commands in header
                 if 'cmd_type' in header:
                     self.handle_server_command(header)
+                
+                # Track agent-player mapping
+                player_name = header.get('player_name')
+                agent_id = header.get('agent_id')
+                if player_name and agent_id:
+                    # This agent is mapped to this player
+                    self.mapped_players.add(player_name)
+                
+                # Get team relationships
+                teams = header.get('teams', {})
 
                 # Body
                 blen = header['bodyLength']
@@ -153,18 +193,44 @@ class AgentController:
                     if len(parts) >= 3:
                         etype = parts[1]
                         if etype == 'HIT':
-                            reward += self.damage_dealt.get()
+                            attacker = parts[2] if len(parts) > 2 else None
+                            victim = parts[3] if len(parts) > 3 else None
+                            
+                            # Check if this agent dealt the hit
+                            if attacker in self.mapped_players:
+                                # Check if victim is a teammate
+                                if victim and teams.get(victim) == 'team':
+                                    # Team hit penalty
+                                    reward += self.team_hit_penalty.get()
+                                    self.log(f"TEAM HIT: {attacker} -> {victim}")
+                                else:
+                                    # Normal damage dealt reward
+                                    reward += self.damage_dealt.get()
+                            
                         elif etype == 'DEATH':
-                            if curr_health <= 0:
+                            victim = parts[2] if len(parts) > 2 else None
+                            killer = parts[3] if len(parts) > 3 else None
+                            
+                            # Check if this agent got the kill
+                            if killer in self.mapped_players:
+                                # Check if victim is a teammate
+                                if victim and teams.get(victim) == 'team':
+                                    # Team kill penalty
+                                    reward += self.team_kill_penalty.get()
+                                    self.log(f"TEAM KILL: {killer} -> {victim}")
+                                else:
+                                    # Normal win reward
+                                    reward += self.win_reward.get()
+                                    self.log("WIN")
+                                    self.total_reward += reward
+                                    self.frame.after(0, lambda: self.reward_var.set(f"Reward: 0.0"))
+                                    self.total_reward = 0.0
+                            
+                            # Check if this agent died
+                            elif victim in self.mapped_players:
                                 reward += self.loss_penalty.get()
                                 self.log("LOSS")
-                                self.total_reward += reward  # Add final reward and reset
-                                self.frame.after(0, lambda: self.reward_var.set(f"Reward: 0.0"))
-                                self.total_reward = 0.0
-                            else:
-                                reward += self.win_reward.get()
-                                self.log("WIN")
-                                self.total_reward += reward  # Add final reward and reset
+                                self.total_reward += reward
                                 self.frame.after(0, lambda: self.reward_var.set(f"Reward: 0.0"))
                                 self.total_reward = 0.0
 
@@ -228,7 +294,7 @@ class AgentController:
 
 
 def command_listener(agents, port=10001):
-    """Listen for START/STOP/RESET commands from the Minecraft mod on a dedicated port."""
+    """Listen for START/STOP/RESET/HIT/DEATH/MAP commands from the Minecraft mod on a dedicated port."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
@@ -238,6 +304,9 @@ def command_listener(agents, port=10001):
     except Exception as e:
         print(f"Command listener failed to bind on port {port}: {e}")
         return
+
+    # Global agent-player mapping
+    player_to_agent = {}
 
     while True:
         try:
@@ -262,15 +331,46 @@ def command_listener(agents, port=10001):
                     cmd_type = msg.get('type', '')
                     cmd_data = msg.get('data', '')
 
-                    for ag in agents:
-                        if cmd_type == 'START':
+                    if cmd_type == 'START':
+                        for ag in agents:
                             ag.log('>>> Reward tracking STARTED')
-                        elif cmd_type == 'STOP':
+                    elif cmd_type == 'STOP':
+                        for ag in agents:
                             ag.log('>>> Reward tracking STOPPED')
-                        elif cmd_type == 'RESET':
+                    elif cmd_type == 'RESET':
+                        for ag in agents:
                             ag.log(f'>>> RESET: {cmd_data}')
                             ag.total_reward = 0.0
                             ag.frame.after(0, lambda a=ag: a.reward_var.set("Reward: 0.0"))
+                    elif cmd_type == 'MAP':
+                        # MAP format: "playerName,agentId"
+                        parts = cmd_data.split(',')
+                        if len(parts) == 2:
+                            player_name, agent_id_str = parts
+                            try:
+                                agent_id = int(agent_id_str)
+                                player_to_agent[player_name] = agent_id
+                                print(f"[MAP] {player_name} -> Agent {agent_id}")
+                            except ValueError:
+                                print(f"[MAP] Invalid agent ID: {agent_id_str}")
+                    elif cmd_type == 'HIT':
+                        # HIT format: "attackerName,victimName"
+                        parts = cmd_data.split(',')
+                        if len(parts) == 2:
+                            attacker, victim = parts
+                            print(f"[HIT] {attacker} -> {victim}")
+                            # Process via agent mapping (if needed for redundancy)
+                    elif cmd_type == 'DEATH':
+                        # DEATH format: "victimName,killerName"
+                        parts = cmd_data.split(',')
+                        if len(parts) == 2:
+                            victim, killer = parts
+                            print(f"[DEATH] {victim} killed by {killer}")
+                            # Process via agent mapping (if needed for redundancy)
+                    elif cmd_type == 'TEAM':
+                        # TEAM format: "ADD:player" or "REMOVE:player"
+                        print(f"[TEAM] {cmd_data}")
+                        # Optional: broadcast team changes to all agents
                 except Exception as e:
                     print(f"Command parse error: {e}")
         except Exception:
@@ -300,6 +400,7 @@ class AgentManager:
         control.pack(side="bottom", pady=5)
         ttk.Button(control, text="+ Add Agent", command=self.add_agent).pack(side="left", padx=5)
         ttk.Button(control, text="- Remove Last", command=self.remove_agent).pack(side="left", padx=5)
+        ttk.Button(control, text="Apply Agent 1 Config to All", command=self.apply_to_all).pack(side="left", padx=5)
         
         # Start with 2 agents
         self.add_agent()
@@ -307,9 +408,13 @@ class AgentManager:
     
     def add_agent(self):
         agent_num = len(self.agents) + 1
+        # Port allocation: skip 10001 (command port)
         port = 9999 + len(self.agents)
+        if port >= 10001:
+            port += 1
         name = f"Agent {agent_num}"
         agent = AgentController(self.agent_frame, name, port)
+        agent.parent_manager = self
         self.agents.append(agent)
         print(f"Added {name} on port {port}")
     
@@ -319,6 +424,17 @@ class AgentManager:
             agent.stop()
             agent.frame.destroy()
             print(f"Removed {agent.name}")
+    
+    def apply_to_all(self):
+        """Copy reward config from Agent 1 to all other agents"""
+        if len(self.agents) == 0:
+            return
+        
+        source_config = self.agents[0].get_reward_config()
+        for i, agent in enumerate(self.agents):
+            if i > 0:  # Skip Agent 1 (source)
+                agent.set_reward_config(source_config)
+        print("Applied Agent 1 config to all agents")
 
 if __name__ == '__main__':
     root = tk.Tk()

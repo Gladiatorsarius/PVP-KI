@@ -37,6 +37,7 @@ public class PVP_KI implements ModInitializer {
 	public void onInitialize() {
 		LOGGER.info("Initializing PVP_KI Server Mod");
 		KitManager.loadKits();
+		SettingsManager.loadSettings();
 
 		// Shutdown Hook for Python Process
 		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -105,6 +106,78 @@ public class PVP_KI implements ModInitializer {
 							.executes(context -> resetCommand(context, false))
 							.then(RequiredArgumentBuilder.<CommandSourceStack, Boolean>argument("shuffle", BoolArgumentType.bool())
 								.executes(context -> resetCommand(context, true)))))));
+			
+			// /ki settings - Settings management
+			LiteralArgumentBuilder<CommandSourceStack> settingsRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("settings");
+			
+			// /ki settings show
+			settingsRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("show")
+				.executes(context -> {
+					context.getSource().sendSuccess(() -> Component.literal("=== PVP KI Settings ==="), false);
+					context.getSource().sendSuccess(() -> Component.literal("Nametags: " + (SettingsManager.showTeamNametags ? "ON" : "OFF")), false);
+					context.getSource().sendSuccess(() -> Component.literal("Allowed Biomes: " + 
+						(SettingsManager.allowedBiomes.isEmpty() ? "none" : String.join(", ", SettingsManager.allowedBiomes))), false);
+					context.getSource().sendSuccess(() -> Component.literal("Blocked Biomes: " + 
+						(SettingsManager.blockedBiomes.isEmpty() ? "none" : String.join(", ", SettingsManager.blockedBiomes))), false);
+					return 1;
+				}));
+			
+			// /ki settings nametags <on|off>
+			settingsRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("nametags")
+				.then(RequiredArgumentBuilder.<CommandSourceStack, Boolean>argument("enabled", BoolArgumentType.bool())
+					.executes(context -> {
+						boolean enabled = BoolArgumentType.getBool(context, "enabled");
+						SettingsManager.showTeamNametags = enabled;
+						SettingsManager.saveSettings();
+						context.getSource().sendSuccess(() -> Component.literal("Nametags " + (enabled ? "enabled" : "disabled")), true);
+						return 1;
+					})));
+			
+			// /ki settings biome allow <biome>
+			LiteralArgumentBuilder<CommandSourceStack> biomeRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("biome");
+			biomeRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("allow")
+				.then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("biome", StringArgumentType.word())
+					.executes(context -> {
+						String biome = StringArgumentType.getString(context, "biome");
+						SettingsManager.allowedBiomes.add(biome);
+						SettingsManager.saveSettings();
+						context.getSource().sendSuccess(() -> Component.literal("Added " + biome + " to allowed biomes"), false);
+						return 1;
+					})));
+			
+			// /ki settings biome block <biome>
+			biomeRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("block")
+				.then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("biome", StringArgumentType.word())
+					.executes(context -> {
+						String biome = StringArgumentType.getString(context, "biome");
+						SettingsManager.blockedBiomes.add(biome);
+						SettingsManager.saveSettings();
+						context.getSource().sendSuccess(() -> Component.literal("Added " + biome + " to blocked biomes"), false);
+						return 1;
+					})));
+			
+			// /ki settings biome clear
+			biomeRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("clear")
+				.executes(context -> {
+					SettingsManager.allowedBiomes.clear();
+					SettingsManager.blockedBiomes.clear();
+					SettingsManager.saveSettings();
+					context.getSource().sendSuccess(() -> Component.literal("Cleared all biome filters"), false);
+					return 1;
+				}));
+			
+			// /ki settings biome list
+			biomeRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("list")
+				.executes(context -> {
+					context.getSource().sendSuccess(() -> Component.literal("Allowed: " + 
+						(SettingsManager.allowedBiomes.isEmpty() ? "none" : String.join(", ", SettingsManager.allowedBiomes))), false);
+					context.getSource().sendSuccess(() -> Component.literal("Blocked: " + 
+						(SettingsManager.blockedBiomes.isEmpty() ? "none" : String.join(", ", SettingsManager.blockedBiomes))), false);
+					return 1;
+				}));
+			
+			settingsRoot.then(biomeRoot);
+			kiRoot.then(settingsRoot);
 
 			dispatcher.register(kiRoot);
 		});
@@ -120,21 +193,43 @@ public class PVP_KI implements ModInitializer {
 			kitName = KitManager.getRandomKit();
 		}
 
-		// Find fresh location with unmodified chunks
+		// Find fresh location with unmodified chunks and allowed biome
 		ServerLevel level = (ServerLevel) p1.level();
 		double x, z;
 		int attempts = 0;
+		boolean foundValidLocation = false;
+		
 		do {
 			x = (Math.random() * 2000000) - 1000000;
 			z = (Math.random() * 2000000) - 1000000;
 			attempts++;
 			
 			LevelChunk chunk = level.getChunk((int)x >> 4, (int)z >> 4);
+			
 			// Check if chunk is unmodified: inhabited time == 0 AND no block entities
 			if (chunk.getInhabitedTime() == 0 && chunk.getBlockEntities().isEmpty()) {
-				break;
+				// Check biome filtering
+				BlockPos pos = new BlockPos((int)x, 64, (int)z);
+				net.minecraft.world.level.biome.Biome biome = level.getBiome(pos).value();
+				String biomeName = level.registryAccess()
+					.registryOrThrow(net.minecraft.core.registries.Registries.BIOME)
+					.getKey(biome).getPath();
+				
+				if (SettingsManager.isBiomeAllowed(biomeName)) {
+					foundValidLocation = true;
+					break;
+				}
 			}
-		} while (attempts < 10);
+			
+			// Warn if taking too many attempts
+			if (attempts % 50 == 0) {
+				LOGGER.warn("Biome search taking long: {} attempts", attempts);
+			}
+		} while (attempts < 200); // Increased from 10 to 200 for biome filtering
+		
+		if (!foundValidLocation) {
+			LOGGER.warn("Could not find valid location after {} attempts, using last attempt", attempts);
+		}
 
 		// Find safe surface Y (first solid block from top)
 		double y = 63; // Default to world height

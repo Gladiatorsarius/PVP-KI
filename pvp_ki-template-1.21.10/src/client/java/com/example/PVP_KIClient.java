@@ -103,16 +103,62 @@ public class PVP_KIClient implements ClientModInitializer {
 							return 1;
 						}))));
 
-			// Client-side /agent <1|2> (switches IPC port locally)
+			// Client-side /agent <n> (switches IPC port locally, supports any agent number)
 			dispatcher.register(ClientCommandManager.literal("agent")
-				.then(ClientCommandManager.argument("id", IntegerArgumentType.integer(1, 2))
+				.then(ClientCommandManager.argument("id", IntegerArgumentType.integer(1))
 					.executes(context -> {
 						int id = IntegerArgumentType.getInteger(context, "id");
-						int port = (id == 1) ? 9999 : 10000;
+						// Port allocation: 9999 + (id - 1), but skip 10001 (command port)
+						int port = 9999 + (id - 1);
+						if (port >= 10001) {
+							port++; // Skip command port 10001
+						}
 						
+						ClientTeamManager.setCurrentAgentId(id);
 						startIPC(port);
 						
 						context.getSource().sendFeedback(Component.literal("Switched to Agent " + id + " (Port " + port + ")"));
+						return 1;
+					})));
+			
+			// Client-side /team commands (local team management)
+			dispatcher.register(ClientCommandManager.literal("team")
+				.then(ClientCommandManager.literal("add")
+					.then(ClientCommandManager.argument("player", StringArgumentType.word())
+						.executes(context -> {
+							String playerName = StringArgumentType.getString(context, "player");
+							ClientTeamManager.addTeamMember(playerName);
+							context.getSource().sendFeedback(Component.literal("Added " + playerName + " to team"));
+							return 1;
+						})))
+				.then(ClientCommandManager.literal("remove")
+					.then(ClientCommandManager.argument("player", StringArgumentType.word())
+						.executes(context -> {
+							String playerName = StringArgumentType.getString(context, "player");
+							ClientTeamManager.removeTeamMember(playerName);
+							context.getSource().sendFeedback(Component.literal("Removed " + playerName + " from team"));
+							return 1;
+						})))
+				.then(ClientCommandManager.literal("enemy")
+					.then(ClientCommandManager.argument("player", StringArgumentType.word())
+						.executes(context -> {
+							String playerName = StringArgumentType.getString(context, "player");
+							ClientTeamManager.addEnemy(playerName);
+							context.getSource().sendFeedback(Component.literal("Marked " + playerName + " as enemy"));
+							return 1;
+						})))
+				.then(ClientCommandManager.literal("list")
+					.executes(context -> {
+						Set<String> team = ClientTeamManager.getTeamMembers();
+						Set<String> enemies = ClientTeamManager.getEnemies();
+						context.getSource().sendFeedback(Component.literal("Team: " + (team.isEmpty() ? "none" : String.join(", ", team))));
+						context.getSource().sendFeedback(Component.literal("Enemies: " + (enemies.isEmpty() ? "none" : String.join(", ", enemies))));
+						return 1;
+					}))
+				.then(ClientCommandManager.literal("clear")
+					.executes(context -> {
+						ClientTeamManager.clearAll();
+						context.getSource().sendFeedback(Component.literal("Cleared all team and enemy lists"));
 						return 1;
 					})));
 		});

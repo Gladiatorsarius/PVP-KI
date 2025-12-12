@@ -85,6 +85,17 @@ public class IPCManager implements Runnable {
                     state.put("cmd_type", cmd.type);
                     state.put("cmd_data", cmd.data);
                 }
+                
+                // Inject agent mapping (player_name and agent_id)
+                net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+                if (mc.player != null) {
+                    state.put("player_name", mc.player.getName().getString());
+                    state.put("agent_id", ClientTeamManager.getCurrentAgentId());
+                }
+                
+                // Inject team relationships for all known players
+                Map<String, String> teams = ClientTeamManager.getAllRelationships();
+                state.put("teams", teams);
 
                 // Add body length
                 state.put("bodyLength", frameBytes.length);
