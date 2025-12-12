@@ -173,19 +173,20 @@ class AgentController:
                         etype = parts[1]
                         if etype == 'HIT':
                             # HIT event format: "EVENT:HIT:attacker:victim"
+                            # Note: This event is sent to the attacker's client (local player)
                             if len(parts) >= 4:
                                 attacker = parts[2]
                                 victim = parts[3]
                                 
-                                # Check if this is a team hit (both players in same team)
-                                attacker_team = teams.get(attacker, None)
+                                # Check if this is a team hit
+                                # The attacker is the local player (us), check if victim is our teammate
                                 victim_team = teams.get(victim, None)
-                                is_team_hit = (attacker_team == "team" and victim_team == "team")
+                                is_team_hit = (victim_team == "team")
                                 
                                 if is_team_hit:
                                     # Apply team hit penalty
                                     reward += self.team_hit_penalty.get()
-                                    self.log(f"TEAM HIT: {attacker} -> {victim}")
+                                    self.log(f"TEAM HIT: {victim}")
                                 else:
                                     # Normal hit reward
                                     reward += self.damage_dealt.get()
@@ -194,17 +195,17 @@ class AgentController:
                                 reward += self.damage_dealt.get()
                         elif etype == 'DEATH':
                             # DEATH event format: "EVENT:DEATH:victim:killer"
+                            # Note: This event is sent to the victim's client (local player)
                             if len(parts) >= 4:
                                 victim = parts[2]
                                 killer = parts[3]
                                 
-                                # Check if this is a team kill
-                                killer_team = teams.get(killer, None)
-                                victim_team = teams.get(victim, None)
-                                is_team_kill = (killer_team == "team" and victim_team == "team" and killer != "Environment")
-                                
                                 if curr_health <= 0:
-                                    # This agent died
+                                    # This agent died (we are the victim)
+                                    # Check if we were killed by a teammate
+                                    killer_team = teams.get(killer, None)
+                                    is_team_kill = (killer_team == "team" and killer != "Environment")
+                                    
                                     if is_team_kill:
                                         # Killed by teammate - extra penalty
                                         reward += self.loss_penalty.get() + self.team_kill_penalty.get()
@@ -216,7 +217,11 @@ class AgentController:
                                     self.frame.after(0, lambda: self.reward_var.set(f"Reward: 0.0"))
                                     self.total_reward = 0.0
                                 else:
-                                    # This agent got a kill
+                                    # This agent got a kill (we are the killer)
+                                    # Check if we killed a teammate
+                                    victim_team = teams.get(victim, None)
+                                    is_team_kill = (victim_team == "team")
+                                    
                                     if is_team_kill:
                                         # Team kill - apply penalty instead of reward
                                         reward += self.team_kill_penalty.get()
