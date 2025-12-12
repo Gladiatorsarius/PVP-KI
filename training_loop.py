@@ -163,25 +163,84 @@ class AgentController:
                     reward += (last_health - curr_health) * self.damage_taken.get()
                 last_health = curr_health
 
+                # Get player name and team data from header
+                player_name = header.get('player_name', '')
+                teams = header.get('teams', {})
+                
                 for evt in header.get('events', []):
                     parts = evt.split(':')
                     if len(parts) >= 3:
                         etype = parts[1]
                         if etype == 'HIT':
-                            reward += self.damage_dealt.get()
-                        elif etype == 'DEATH':
-                            if curr_health <= 0:
-                                reward += self.loss_penalty.get()
-                                self.log("LOSS")
-                                self.total_reward += reward  # Add final reward and reset
-                                self.frame.after(0, lambda: self.reward_var.set(f"Reward: 0.0"))
-                                self.total_reward = 0.0
+                            # HIT event format: "EVENT:HIT:attacker:victim"
+                            if len(parts) >= 4:
+                                attacker = parts[2]
+                                victim = parts[3]
+                                
+                                # Check if this is a team hit (both players in same team)
+                                attacker_team = teams.get(attacker, None)
+                                victim_team = teams.get(victim, None)
+                                is_team_hit = (attacker_team == "team" and victim_team == "team")
+                                
+                                if is_team_hit:
+                                    # Apply team hit penalty
+                                    reward += self.team_hit_penalty.get()
+                                    self.log(f"TEAM HIT: {attacker} -> {victim}")
+                                else:
+                                    # Normal hit reward
+                                    reward += self.damage_dealt.get()
                             else:
-                                reward += self.win_reward.get()
-                                self.log("WIN")
-                                self.total_reward += reward  # Add final reward and reset
-                                self.frame.after(0, lambda: self.reward_var.set(f"Reward: 0.0"))
-                                self.total_reward = 0.0
+                                # Fallback for events without attacker/victim info
+                                reward += self.damage_dealt.get()
+                        elif etype == 'DEATH':
+                            # DEATH event format: "EVENT:DEATH:victim:killer"
+                            if len(parts) >= 4:
+                                victim = parts[2]
+                                killer = parts[3]
+                                
+                                # Check if this is a team kill
+                                killer_team = teams.get(killer, None)
+                                victim_team = teams.get(victim, None)
+                                is_team_kill = (killer_team == "team" and victim_team == "team" and killer != "Environment")
+                                
+                                if curr_health <= 0:
+                                    # This agent died
+                                    if is_team_kill:
+                                        # Killed by teammate - extra penalty
+                                        reward += self.loss_penalty.get() + self.team_kill_penalty.get()
+                                        self.log(f"TEAM KILLED by {killer}")
+                                    else:
+                                        reward += self.loss_penalty.get()
+                                        self.log("LOSS")
+                                    self.total_reward += reward  # Add final reward and reset
+                                    self.frame.after(0, lambda: self.reward_var.set(f"Reward: 0.0"))
+                                    self.total_reward = 0.0
+                                else:
+                                    # This agent got a kill
+                                    if is_team_kill:
+                                        # Team kill - apply penalty instead of reward
+                                        reward += self.team_kill_penalty.get()
+                                        self.log(f"TEAM KILL: {victim}")
+                                    else:
+                                        reward += self.win_reward.get()
+                                        self.log("WIN")
+                                    self.total_reward += reward  # Add final reward and reset
+                                    self.frame.after(0, lambda: self.reward_var.set(f"Reward: 0.0"))
+                                    self.total_reward = 0.0
+                            else:
+                                # Fallback for events without victim/killer info
+                                if curr_health <= 0:
+                                    reward += self.loss_penalty.get()
+                                    self.log("LOSS")
+                                    self.total_reward += reward
+                                    self.frame.after(0, lambda: self.reward_var.set(f"Reward: 0.0"))
+                                    self.total_reward = 0.0
+                                else:
+                                    reward += self.win_reward.get()
+                                    self.log("WIN")
+                                    self.total_reward += reward
+                                    self.frame.after(0, lambda: self.reward_var.set(f"Reward: 0.0"))
+                                    self.total_reward = 0.0
 
                 # Accumulate reward
                 self.total_reward += reward

@@ -291,6 +291,8 @@ public class PVP_KI implements ModInitializer {
 				if (player instanceof ServerPlayer) {
 					((ServerPlayer)player).displayClientMessage(Component.literal("EVENT:HIT:" + attacker + ":" + target), true);
 				}
+				// Send HIT event to Python via command port (redundant with client, for logging)
+				ServerIPCClient.sendCommand("HIT", attacker + "," + target);
 			}
 			return InteractionResult.PASS;
 		});
@@ -304,6 +306,8 @@ public class PVP_KI implements ModInitializer {
 				// Send death event to action queue
 				ServerPlayer serverPlayer = (ServerPlayer) entity;
 				serverPlayer.displayClientMessage(Component.literal("EVENT:DEATH:" + victim + ":" + killer), true);
+				// Send DEATH event to Python via command port (redundant with client, for logging)
+				ServerIPCClient.sendCommand("DEATH", victim + "," + killer);
 			}
 		});
 	}
