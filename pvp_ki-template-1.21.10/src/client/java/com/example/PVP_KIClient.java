@@ -20,6 +20,7 @@ public class PVP_KIClient implements ClientModInitializer {
 	public static IPCManager ipcManager;
 	public static JsonObject pendingAction;
 	public static final List<String> eventQueue = Collections.synchronizedList(new ArrayList<>());
+	public static int currentAgentId = 1; // Track current agent selection
 
 	@Override
 	public void onInitializeClient() {
@@ -103,16 +104,65 @@ public class PVP_KIClient implements ClientModInitializer {
 							return 1;
 						}))));
 
-			// Client-side /agent <1|2> (switches IPC port locally)
+			// Client-side /agent <n> (switches IPC port locally, supports dynamic agents)
 			dispatcher.register(ClientCommandManager.literal("agent")
-				.then(ClientCommandManager.argument("id", IntegerArgumentType.integer(1, 2))
+				.then(ClientCommandManager.argument("id", IntegerArgumentType.integer(1))
 					.executes(context -> {
 						int id = IntegerArgumentType.getInteger(context, "id");
-						int port = (id == 1) ? 9999 : 10000;
+						// Port calculation: 9999, 10000, 10002, 10003, ... (skip 10001 for command port)
+						int port = 9999 + (id - 1);
+						if (port >= 10001) {
+							port++; // Skip command port 10001
+						}
 						
+						currentAgentId = id;
 						startIPC(port);
 						
+						Minecraft mc = Minecraft.getInstance();
+						if (mc.player != null) {
+							// Send MAP command to server (optional, for server-side tracking)
+							String mapData = mc.player.getName().getString() + "," + id;
+							if (mc.getConnection() != null) {
+								// Could send to server if needed, but client injection handles this
+							}
+						}
+						
 						context.getSource().sendFeedback(Component.literal("Switched to Agent " + id + " (Port " + port + ")"));
+						return 1;
+					})));
+
+			// Client-side /team commands
+			dispatcher.register(ClientCommandManager.literal("team")
+				.then(ClientCommandManager.literal("add")
+					.then(ClientCommandManager.argument("player", StringArgumentType.string())
+						.executes(context -> {
+							String playerName = StringArgumentType.getString(context, "player");
+							TeamManager.addTeammate(playerName);
+							context.getSource().sendFeedback(Component.literal("Added " + playerName + " to team"));
+							return 1;
+						})))
+				.then(ClientCommandManager.literal("remove")
+					.then(ClientCommandManager.argument("player", StringArgumentType.string())
+						.executes(context -> {
+							String playerName = StringArgumentType.getString(context, "player");
+							TeamManager.removeTeammate(playerName);
+							context.getSource().sendFeedback(Component.literal("Removed " + playerName + " from team"));
+							return 1;
+						})))
+				.then(ClientCommandManager.literal("list")
+					.executes(context -> {
+						List<String> team = TeamManager.listTeam();
+						List<String> enemies = TeamManager.listEnemies();
+						String teamStr = team.isEmpty() ? "None" : String.join(", ", team);
+						String enemyStr = enemies.isEmpty() ? "None" : String.join(", ", enemies);
+						context.getSource().sendFeedback(Component.literal("Team: " + teamStr));
+						context.getSource().sendFeedback(Component.literal("Enemies: " + enemyStr));
+						return 1;
+					}))
+				.then(ClientCommandManager.literal("clear")
+					.executes(context -> {
+						TeamManager.clearAll();
+						context.getSource().sendFeedback(Component.literal("Cleared all teams"));
 						return 1;
 					})));
 		});

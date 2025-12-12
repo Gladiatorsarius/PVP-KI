@@ -86,6 +86,16 @@ public class IPCManager implements Runnable {
                     state.put("cmd_data", cmd.data);
                 }
 
+                // Inject agent mapping (player_name, agent_id)
+                LocalPlayer player = Minecraft.getInstance().player;
+                if (player != null) {
+                    state.put("player_name", player.getName().getString());
+                    state.put("agent_id", PVP_KIClient.currentAgentId);
+                }
+
+                // Inject team data for all visible players
+                state.put("teams", TeamManager.getTeamData());
+
                 // Add body length
                 state.put("bodyLength", frameBytes.length);
 

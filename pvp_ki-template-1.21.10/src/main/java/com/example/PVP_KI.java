@@ -37,6 +37,7 @@ public class PVP_KI implements ModInitializer {
 	public void onInitialize() {
 		LOGGER.info("Initializing PVP_KI Server Mod");
 		KitManager.loadKits();
+		SettingsManager.loadSettings();
 
 		// Shutdown Hook for Python Process
 		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
@@ -106,6 +107,88 @@ public class PVP_KI implements ModInitializer {
 							.then(RequiredArgumentBuilder.<CommandSourceStack, Boolean>argument("shuffle", BoolArgumentType.bool())
 								.executes(context -> resetCommand(context, true)))))));
 
+			// /ki settings - Settings management
+			LiteralArgumentBuilder<CommandSourceStack> settingsRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("settings");
+			
+			// /ki settings show
+			settingsRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("show")
+				.executes(context -> {
+					context.getSource().sendSuccess(() -> Component.literal("=== PVP KI Settings ==="), false);
+					context.getSource().sendSuccess(() -> Component.literal("Nametags: " + (SettingsManager.showTeamNametags ? "ON" : "OFF")), false);
+					context.getSource().sendSuccess(() -> Component.literal("Allowed Biomes: " + 
+						(SettingsManager.allowedBiomes.isEmpty() ? "None" : String.join(", ", SettingsManager.allowedBiomes))), false);
+					context.getSource().sendSuccess(() -> Component.literal("Blocked Biomes: " + 
+						(SettingsManager.blockedBiomes.isEmpty() ? "None" : String.join(", ", SettingsManager.blockedBiomes))), false);
+					return 1;
+				}));
+			
+			// /ki settings nametags <on|off>
+			settingsRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("nametags")
+				.then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("state", StringArgumentType.word())
+					.executes(context -> {
+						String state = StringArgumentType.getString(context, "state");
+						if ("on".equalsIgnoreCase(state)) {
+							SettingsManager.showTeamNametags = true;
+							SettingsManager.saveSettings();
+							context.getSource().sendSuccess(() -> Component.literal("Team nametags enabled"), false);
+						} else if ("off".equalsIgnoreCase(state)) {
+							SettingsManager.showTeamNametags = false;
+							SettingsManager.saveSettings();
+							context.getSource().sendSuccess(() -> Component.literal("Team nametags disabled"), false);
+						} else {
+							context.getSource().sendFailure(Component.literal("Use 'on' or 'off'"));
+						}
+						return 1;
+					})));
+			
+			// /ki settings biome
+			LiteralArgumentBuilder<CommandSourceStack> biomeRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("biome");
+			
+			// /ki settings biome allow <biome>
+			biomeRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("allow")
+				.then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("biome", StringArgumentType.string())
+					.executes(context -> {
+						String biome = StringArgumentType.getString(context, "biome");
+						SettingsManager.allowedBiomes.add(biome);
+						SettingsManager.saveSettings();
+						context.getSource().sendSuccess(() -> Component.literal("Added '" + biome + "' to allowed biomes"), false);
+						return 1;
+					})));
+			
+			// /ki settings biome block <biome>
+			biomeRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("block")
+				.then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("biome", StringArgumentType.string())
+					.executes(context -> {
+						String biome = StringArgumentType.getString(context, "biome");
+						SettingsManager.blockedBiomes.add(biome);
+						SettingsManager.saveSettings();
+						context.getSource().sendSuccess(() -> Component.literal("Added '" + biome + "' to blocked biomes"), false);
+						return 1;
+					})));
+			
+			// /ki settings biome clear
+			biomeRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("clear")
+				.executes(context -> {
+					SettingsManager.allowedBiomes.clear();
+					SettingsManager.blockedBiomes.clear();
+					SettingsManager.saveSettings();
+					context.getSource().sendSuccess(() -> Component.literal("Cleared all biome filters"), false);
+					return 1;
+				}));
+			
+			// /ki settings biome list
+			biomeRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("list")
+				.executes(context -> {
+					String allowed = SettingsManager.allowedBiomes.isEmpty() ? "None" : String.join(", ", SettingsManager.allowedBiomes);
+					String blocked = SettingsManager.blockedBiomes.isEmpty() ? "None" : String.join(", ", SettingsManager.blockedBiomes);
+					context.getSource().sendSuccess(() -> Component.literal("Allowed: " + allowed), false);
+					context.getSource().sendSuccess(() -> Component.literal("Blocked: " + blocked), false);
+					return 1;
+				}));
+			
+			settingsRoot.then(biomeRoot);
+			kiRoot.then(settingsRoot);
+
 			dispatcher.register(kiRoot);
 		});
 	}
@@ -120,10 +203,11 @@ public class PVP_KI implements ModInitializer {
 			kitName = KitManager.getRandomKit();
 		}
 
-		// Find fresh location with unmodified chunks
+		// Find fresh location with unmodified chunks AND allowed biome
 		ServerLevel level = (ServerLevel) p1.level();
 		double x, z;
 		int attempts = 0;
+		boolean foundValidLocation = false;
 		do {
 			x = (Math.random() * 2000000) - 1000000;
 			z = (Math.random() * 2000000) - 1000000;
@@ -132,9 +216,23 @@ public class PVP_KI implements ModInitializer {
 			LevelChunk chunk = level.getChunk((int)x >> 4, (int)z >> 4);
 			// Check if chunk is unmodified: inhabited time == 0 AND no block entities
 			if (chunk.getInhabitedTime() == 0 && chunk.getBlockEntities().isEmpty()) {
-				break;
+				// Check biome filtering
+				BlockPos pos = new BlockPos((int)x, 64, (int)z);
+				String biome = level.getBiome(pos).unwrapKey().orElse(null) != null 
+					? level.getBiome(pos).unwrapKey().get().location().toString() 
+					: "unknown";
+				
+				if (SettingsManager.isBiomeAllowed(biome)) {
+					foundValidLocation = true;
+					break;
+				}
 			}
-		} while (attempts < 10);
+		} while (attempts < 100);
+		
+		if (!foundValidLocation) {
+			context.getSource().sendFailure(Component.literal("Could not find valid location with allowed biomes after 100 attempts"));
+			return 0;
+		}
 
 		// Find safe surface Y (first solid block from top)
 		double y = 63; // Default to world height
