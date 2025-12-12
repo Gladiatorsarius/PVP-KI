@@ -8,17 +8,20 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 from model import PVPModel
+import os
 
 class AgentController:
-    def __init__(self, parent, name, port):
+    def __init__(self, parent, name, port, host='127.0.0.1'):
         self.name = name
         self.port = port
+        self.host = host  # Support cloud/remote agents
         self.running = False
         self.stop_event = threading.Event()
         self.thread = None
 
-        # UI Frame
-        self.frame = ttk.LabelFrame(parent, text=f"{name} (Port {port})")
+        # UI Frame - show host if not localhost
+        display_location = f"{host}:{port}" if host != '127.0.0.1' else f"Port {port}"
+        self.frame = ttk.LabelFrame(parent, text=f"{name} ({display_location})")
         self.frame.pack(side="left", padx=10, pady=10, fill="both", expand=True)
 
         # Reward Config
@@ -99,13 +102,13 @@ class AgentController:
         return data
 
     def loop(self):
-        self.log(f"Listening on {self.port}...")
+        self.log(f"Connecting to {self.host}:{self.port}...")
         client = None
         
         while not self.stop_event.is_set():
             try:
                 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                client.connect(('127.0.0.1', self.port))
+                client.connect((self.host, self.port))
                 self.log("Connected!")
                 break
             except ConnectionRefusedError:
@@ -227,16 +230,22 @@ class AgentController:
             self.log(f"Command error: {e}")
 
 
-def command_listener(agents, port=10001):
-    """Listen for START/STOP/RESET commands from the Minecraft mod on a dedicated port."""
+def command_listener(agents, port=10001, bind_host='0.0.0.0'):
+    """Listen for START/STOP/RESET commands from the Minecraft mod on a dedicated port.
+    
+    Args:
+        agents: List of AgentController instances
+        port: Port to bind to (default 10001)
+        bind_host: Host to bind to - '0.0.0.0' for cloud/remote access, '127.0.0.1' for local only
+    """
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     try:
-        sock.bind(('127.0.0.1', port))
+        sock.bind((bind_host, port))
         sock.listen(5)
-        print(f"Command listener on port {port}...")
+        print(f"Command listener on {bind_host}:{port}...")
     except Exception as e:
-        print(f"Command listener failed to bind on port {port}: {e}")
+        print(f"Command listener failed to bind on {bind_host}:{port}: {e}")
         return
 
     while True:
@@ -301,17 +310,44 @@ class AgentManager:
         ttk.Button(control, text="+ Add Agent", command=self.add_agent).pack(side="left", padx=5)
         ttk.Button(control, text="- Remove Last", command=self.remove_agent).pack(side="left", padx=5)
         
-        # Start with 2 agents
+        # Load agents from config or start with defaults
+        self.load_config()
+    
+    def load_config(self):
+        """Load agent configuration from agent_config.json if it exists."""
+        config_path = os.path.join(os.path.dirname(__file__), 'agent_config.json')
+        if os.path.exists(config_path):
+            try:
+                with open(config_path, 'r') as f:
+                    config = json.load(f)
+                    agents_config = config.get('agents', [])
+                    if agents_config:
+                        print("Loading agents from configuration...")
+                        for ag_conf in agents_config:
+                            self.add_agent(ag_conf.get('host', '127.0.0.1'), ag_conf.get('port'))
+                        return
+            except Exception as e:
+                print(f"Failed to load config: {e}, using defaults")
+        
+        # Default: Start with 2 local agents
         self.add_agent()
         self.add_agent()
     
-    def add_agent(self):
+    def add_agent(self, host='127.0.0.1', port=None):
+        """Add a new agent, optionally on a remote host.
+        
+        Args:
+            host: Host address (default '127.0.0.1' for local, can be cloud IP)
+            port: Port number (default auto-assigned from 9999+)
+        """
         agent_num = len(self.agents) + 1
-        port = 9999 + len(self.agents)
+        if port is None:
+            port = 9999 + len(self.agents)
         name = f"Agent {agent_num}"
-        agent = AgentController(self.agent_frame, name, port)
+        agent = AgentController(self.agent_frame, name, port, host)
         self.agents.append(agent)
-        print(f"Added {name} on port {port}")
+        location = f"{host}:{port}" if host != '127.0.0.1' else f"localhost:{port}"
+        print(f"Added {name} on {location}")
     
     def remove_agent(self):
         if len(self.agents) > 1:
@@ -321,13 +357,34 @@ class AgentManager:
             print(f"Removed {agent.name}")
 
 if __name__ == '__main__':
+    # Load configuration for command listener
+    config_path = os.path.join(os.path.dirname(__file__), 'agent_config.json')
+    bind_host = '127.0.0.1'  # Default to local only for security
+    cmd_port = 10001
+    
+    if os.path.exists(config_path):
+        try:
+            with open(config_path, 'r') as f:
+                config = json.load(f)
+                cmd_listener_conf = config.get('command_listener', {})
+                bind_host = cmd_listener_conf.get('bind_host', '127.0.0.1')
+                cmd_port = cmd_listener_conf.get('port', 10001)
+                print(f"Command listener config: {bind_host}:{cmd_port}")
+        except Exception as e:
+            print(f"Failed to load command listener config: {e}, using defaults")
+    
     root = tk.Tk()
-    root.title("Multi-Agent PVP Training")
+    root.title("Multi-Agent PVP Training (Cloud-Enabled)")
     root.geometry("1200x700")
     
     manager = AgentManager(root)
     
-    # Start command listener thread
-    threading.Thread(target=command_listener, args=(manager.agents,), daemon=True).start()
+    # Start command listener thread with configuration
+    threading.Thread(
+        target=command_listener, 
+        args=(manager.agents,), 
+        kwargs={'port': cmd_port, 'bind_host': bind_host},
+        daemon=True
+    ).start()
     
     root.mainloop()
