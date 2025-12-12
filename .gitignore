@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Checkpoints
+checkpoints/
+
+# Virtual environments
+venv/
+ENV/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Minecraft mod build
+pvp_ki-template-1.21.10/.gradle/
+pvp_ki-template-1.21.10/build/
+pvp_ki-template-1.21.10/run/
+pvp_ki-template-1.21.10/.cache/
+
+# Logs
+*.log
+latest.log
+
+# OS
+.DS_Store
+Thumbs.db
