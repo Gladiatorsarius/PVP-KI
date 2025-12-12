@@ -160,7 +160,20 @@ public class PVP_KIClient implements ClientModInitializer {
 						ClientTeamManager.clearAll();
 						context.getSource().sendFeedback(Component.literal("Cleared all team and enemy lists"));
 						return 1;
-					})));
+					}))
+				.then(ClientCommandManager.literal("nametags")
+					.then(ClientCommandManager.literal("on")
+						.executes(context -> {
+							com.example.SettingsManager.showTeamNametags = true;
+							context.getSource().sendFeedback(Component.literal("Team nametags enabled (shows Team/Enemy labels)"));
+							return 1;
+						}))
+					.then(ClientCommandManager.literal("off")
+						.executes(context -> {
+							com.example.SettingsManager.showTeamNametags = false;
+							context.getSource().sendFeedback(Component.literal("Team nametags disabled (shows normal names)"));
+							return 1;
+						}))));
 		});
 
 		// Register Chat Listener for Events

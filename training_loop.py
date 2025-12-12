@@ -8,14 +8,17 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 from model import PVPModel
+from ppo_trainer import PPOTrainer
 
 class AgentController:
-    def __init__(self, parent, name, port):
+    def __init__(self, parent, name, port, shared_model=None, ppo_trainer=None):
         self.name = name
         self.port = port
         self.running = False
         self.stop_event = threading.Event()
         self.thread = None
+        self.shared_model = shared_model
+        self.ppo_trainer = ppo_trainer
 
         # UI Frame
         self.frame = ttk.LabelFrame(parent, text=f"{name} (Port {port})")
@@ -144,7 +147,8 @@ class AgentController:
 
         if self.stop_event.is_set(): return
 
-        model = PVPModel()
+        # Use shared model if available, otherwise create local model
+        model = self.shared_model if self.shared_model is not None else PVPModel()
         model.eval()
         last_health = 20.0
         self.total_reward = 0.0  # Reset reward at start
@@ -383,6 +387,20 @@ class AgentManager:
         self.root = root
         self.agents = []
         
+        # Shared PPO trainer for all agents
+        shared_model = PVPModel()
+        self.ppo_trainer = PPOTrainer(
+            model=shared_model,
+            lr=3e-4,
+            gamma=0.99,
+            gae_lambda=0.95,
+            clip_range=0.2,
+            epochs=4,
+            batch_size=256,
+            checkpoint_dir='./checkpoints'
+        )
+        print("Initialized shared PPO trainer")
+        
         # Scrollable frame for agents
         canvas = tk.Canvas(root)
         scrollbar = ttk.Scrollbar(root, orient="horizontal", command=canvas.xview)
@@ -401,6 +419,12 @@ class AgentManager:
         ttk.Button(control, text="+ Add Agent", command=self.add_agent).pack(side="left", padx=5)
         ttk.Button(control, text="- Remove Last", command=self.remove_agent).pack(side="left", padx=5)
         ttk.Button(control, text="Apply Agent 1 Config to All", command=self.apply_to_all).pack(side="left", padx=5)
+        ttk.Button(control, text="Save Checkpoint", command=self.save_checkpoint).pack(side="left", padx=5)
+        ttk.Button(control, text="Load Checkpoint", command=self.load_checkpoint).pack(side="left", padx=5)
+        
+        # Status label for PPO trainer
+        self.trainer_status = tk.StringVar(value=f"Fight Count: 0 | Buffer: 0/{self.ppo_trainer.batch_size}")
+        ttk.Label(control, textvariable=self.trainer_status).pack(side="left", padx=10)
         
         # Start with 2 agents
         self.add_agent()
@@ -413,7 +437,13 @@ class AgentManager:
         if port >= 10001:
             port += 1
         name = f"Agent {agent_num}"
-        agent = AgentController(self.agent_frame, name, port)
+        agent = AgentController(
+            self.agent_frame, 
+            name, 
+            port, 
+            shared_model=self.ppo_trainer.model,
+            ppo_trainer=self.ppo_trainer
+        )
         agent.parent_manager = self
         self.agents.append(agent)
         print(f"Added {name} on port {port}")
@@ -435,15 +465,41 @@ class AgentManager:
             if i > 0:  # Skip Agent 1 (source)
                 agent.set_reward_config(source_config)
         print("Applied Agent 1 config to all agents")
+    
+    def save_checkpoint(self):
+        """Save current model checkpoint"""
+        self.ppo_trainer.save_checkpoint()
+    
+    def load_checkpoint(self):
+        """Load a model checkpoint (opens file dialog)"""
+        from tkinter import filedialog
+        filepath = filedialog.askopenfilename(
+            title="Load Checkpoint",
+            initialdir=self.ppo_trainer.checkpoint_dir,
+            filetypes=[("PyTorch Model", "*.pt"), ("All Files", "*.*")]
+        )
+        if filepath:
+            self.ppo_trainer.load_checkpoint(filepath)
+    
+    def update_status(self):
+        """Update PPO trainer status display"""
+        buffer_size = len(self.ppo_trainer.states)
+        status = f"Fight Count: {self.ppo_trainer.fight_count} | Buffer: {buffer_size}/{self.ppo_trainer.batch_size}"
+        self.trainer_status.set(status)
+        # Schedule next update
+        self.root.after(1000, self.update_status)
 
 if __name__ == '__main__':
     root = tk.Tk()
-    root.title("Multi-Agent PVP Training")
+    root.title("Multi-Agent PVP Training with PPO")
     root.geometry("1200x700")
     
     manager = AgentManager(root)
     
     # Start command listener thread
     threading.Thread(target=command_listener, args=(manager.agents,), daemon=True).start()
+    
+    # Start status update loop
+    root.after(1000, manager.update_status)
     
     root.mainloop()
