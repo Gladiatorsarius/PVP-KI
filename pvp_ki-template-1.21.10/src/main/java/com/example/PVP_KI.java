@@ -288,10 +288,14 @@ public class PVP_KI implements ModInitializer {
 				String attacker = player.getName().getString();
 				String target = entity.getName().getString();
 				LOGGER.info("EVENT:HIT:" + attacker + ":" + target);
-				// Send attack event to action queue
+				
+				// Send to client via chat message (for client-side event queue)
 				if (player instanceof ServerPlayer) {
 					((ServerPlayer)player).displayClientMessage(Component.literal("EVENT:HIT:" + attacker + ":" + target), true);
 				}
+				
+				// Optional: Also send via command port to Python (duplicate/redundant with client injection)
+				ServerIPCClient.sendCommand("HIT", attacker + "," + target);
 			}
 			return InteractionResult.PASS;
 		});
@@ -302,9 +306,13 @@ public class PVP_KI implements ModInitializer {
 				String victim = entity.getName().getString();
 				String killer = source.getEntity() != null ? source.getEntity().getName().getString() : "Environment";
 				LOGGER.info("EVENT:DEATH:" + victim + ":" + killer);
-				// Send death event to action queue
+				
+				// Send to client via chat message
 				ServerPlayer serverPlayer = (ServerPlayer) entity;
 				serverPlayer.displayClientMessage(Component.literal("EVENT:DEATH:" + victim + ":" + killer), true);
+				
+				// Optional: Also send via command port to Python
+				ServerIPCClient.sendCommand("DEATH", victim + "," + killer);
 			}
 		});
 	}

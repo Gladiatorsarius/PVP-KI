@@ -5,9 +5,14 @@ import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandRegistrationCallback;
 import net.fabricmc.fabric.api.client.command.v2.ClientCommandManager;
 import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
+import net.fabricmc.fabric.api.event.player.AttackEntityCallback;
+import net.fabricmc.fabric.api.entity.event.v1.ServerLivingEntityEvents;
+import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientEntityEvents;
 import net.minecraft.client.Minecraft;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.protocol.game.ServerboundChatCommandPacket;
+import net.minecraft.world.InteractionResult;
+import net.minecraft.world.entity.player.Player;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -26,6 +31,9 @@ public class PVP_KIClient implements ClientModInitializer {
 	public void onInitializeClient() {
 		// Start default IPC (Agent 1)
 		startIPC(9999);
+
+		// Register client-side event listeners
+		registerEvents();
 
 		// Register commands
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
@@ -182,5 +190,35 @@ public class PVP_KIClient implements ClientModInitializer {
 		}
 		ipcManager = new IPCManager(port);
 		new Thread(ipcManager).start();
+	}
+
+	private void registerEvents() {
+		// Client-side attack detection
+		AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
+			if (player instanceof Player && entity instanceof Player) {
+				String attacker = player.getName().getString();
+				String target = entity.getName().getString();
+				String event = "EVENT:HIT:" + attacker + ":" + target;
+				eventQueue.add(event);
+				System.out.println("[Client Event] " + event);
+			}
+			return InteractionResult.PASS;
+		});
+
+		// Client-side death detection
+		ClientEntityEvents.ENTITY_UNLOAD.register((entity, world) -> {
+			if (entity instanceof Player) {
+				Player player = (Player) entity;
+				// Check if player died (health <= 0)
+				if (player.getHealth() <= 0) {
+					String victim = player.getName().getString();
+					// We don't know the killer on client side from this event alone
+					// But we can track via last attacker if needed, or use server events
+					String event = "EVENT:DEATH:" + victim + ":unknown";
+					eventQueue.add(event);
+					System.out.println("[Client Event] " + event);
+				}
+			}
+		});
 	}
 }
