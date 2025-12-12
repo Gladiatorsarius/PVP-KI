@@ -101,8 +101,19 @@ public class IPCManager implements Runnable {
                         teams.put(teamMember, "team");
                     }
                     
-                    // Mark other visible players as "enemy" (TODO: get from world)
-                    // For now, just send team members
+                    // Mark other visible players as "enemy"
+                    if (mc.level != null) {
+                        for (net.minecraft.world.entity.player.Player player : mc.level.players()) {
+                            String playerName = player.getName().getString();
+                            // Skip if already marked as team member
+                            if (!teams.containsKey(playerName)) {
+                                // Skip self
+                                if (mc.player != null && !playerName.equals(mc.player.getName().getString())) {
+                                    teams.put(playerName, "enemy");
+                                }
+                            }
+                        }
+                    }
                 }
                 state.put("teams", teams);
 
