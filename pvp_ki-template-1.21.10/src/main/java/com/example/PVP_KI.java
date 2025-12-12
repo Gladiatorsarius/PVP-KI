@@ -146,8 +146,18 @@ public class PVP_KI implements ModInitializer {
 			}
 		}
 
+		// Find safe surface Y for p2 at offset position
+		double y2 = 63;
+		for (int checkY = 320; checkY >= 0; checkY--) {
+			net.minecraft.world.level.block.state.BlockState state = level.getBlockState(new BlockPos((int)x + 10, checkY, (int)z));
+			if (!state.isAir()) {
+				y2 = checkY + 1.8;
+				break;
+			}
+		}
+
 		resetPlayer(p1, x, y, z, kitName, shuffle);
-		resetPlayer(p2, x + 10, y, z, kitName, shuffle);
+		resetPlayer(p2, x + 10, y2, z, kitName, shuffle);
 
 		// Send RESET event to Python
 		ServerIPCClient.sendCommand("RESET", p1.getName().getString() + "," + p2.getName().getString());

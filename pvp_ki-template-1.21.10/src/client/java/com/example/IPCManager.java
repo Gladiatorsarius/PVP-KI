@@ -79,6 +79,13 @@ public class IPCManager implements Runnable {
                     PVP_KIClient.eventQueue.clear();
                 }
 
+                // Check for pending server commands and inject into header
+                CommandQueue.ServerCommand cmd = CommandQueue.dequeue();
+                if (cmd != null) {
+                    state.put("cmd_type", cmd.type);
+                    state.put("cmd_data", cmd.data);
+                }
+
                 // Add body length
                 state.put("bodyLength", frameBytes.length);
 

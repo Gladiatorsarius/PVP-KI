@@ -119,30 +119,8 @@ class AgentController:
         last_health = 20.0
         self.total_reward = 0.0  # Reset reward at start
 
-        # Also listen for server commands on port 9999 or 10000
-        server_sock = None
-        try:
-            server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            server_sock.bind(('127.0.0.1', self.port))
-            server_sock.listen(1)
-            server_sock.settimeout(0.1)  # Non-blocking with timeout
-        except:
-            self.log("Warning: Could not open server socket for commands")
-            server_sock = None
-
         try:
             while not self.stop_event.is_set():
-                # Check for incoming server commands
-                if server_sock:
-                    try:
-                        cmd_sock, _ = server_sock.accept()
-                        self.handle_server_command(cmd_sock)
-                    except socket.timeout:
-                        pass
-                    except:
-                        pass
-
                 # Header Length
                 lb = self.recv_exact(client, 4)
                 if not lb: break
@@ -152,6 +130,10 @@ class AgentController:
                 hdata = self.recv_exact(client, hlen)
                 if not hdata: break
                 header = json.loads(hdata.decode('utf-8'))
+
+                # Check for server commands in header
+                if 'cmd_type' in header:
+                    self.handle_server_command(header)
 
                 # Body
                 blen = header['bodyLength']
@@ -217,7 +199,6 @@ class AgentController:
             self.log(f"Error: {e}")
         finally:
             if client: client.close()
-            if server_sock: server_sock.close()
             self.running = False
             # Use frame.after() to update GUI from thread safely
             self.frame.after(0, lambda: self.start_btn.config(state="normal"))
@@ -225,25 +206,11 @@ class AgentController:
             self.frame.after(0, lambda: self.status_var.set("Status: Stopped"))
             self.log("Disconnected")
 
-    def handle_server_command(self, sock):
-        """Handle commands from server (START, STOP, RESET)"""
+    def handle_server_command(self, header):
+        """Handle commands from server (START, STOP, RESET) in header"""
         try:
-            sock.settimeout(1.0)
-            # Read length (4 bytes)
-            len_bytes = sock.recv(4)
-            if len(len_bytes) < 4: return
-            msg_len = struct.unpack('>I', len_bytes)[0]
-            
-            # Read message
-            msg_bytes = b''
-            while len(msg_bytes) < msg_len:
-                chunk = sock.recv(msg_len - len(msg_bytes))
-                if not chunk: return
-                msg_bytes += chunk
-            
-            msg = json.loads(msg_bytes.decode('utf-8'))
-            cmd_type = msg.get('type', '')
-            cmd_data = msg.get('data', '')
+            cmd_type = header.get('cmd_type', '')
+            cmd_data = header.get('cmd_data', '')
             
             if cmd_type == 'START':
                 self.log(">>> Reward tracking STARTED")
@@ -258,19 +225,109 @@ class AgentController:
                 self.frame.after(0, lambda: self.reward_var.set(f"Reward: 0.0"))
         except Exception as e:
             self.log(f"Command error: {e}")
-        finally:
-            try:
-                sock.close()
-            except:
-                pass
 
+
+def command_listener(agents, port=10001):
+    """Listen for START/STOP/RESET commands from the Minecraft mod on a dedicated port."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind(('127.0.0.1', port))
+        sock.listen(5)
+        print(f"Command listener on port {port}...")
+    except Exception as e:
+        print(f"Command listener failed to bind on port {port}: {e}")
+        return
+
+    while True:
+        try:
+            conn, _ = sock.accept()
+            with conn:
+                # Length-prefixed JSON (4 bytes big-endian)
+                len_bytes = conn.recv(4)
+                if len(len_bytes) < 4:
+                    continue
+                msg_len = struct.unpack('>I', len_bytes)[0]
+                msg_bytes = b''
+                while len(msg_bytes) < msg_len:
+                    chunk = conn.recv(msg_len - len(msg_bytes))
+                    if not chunk:
+                        break
+                    msg_bytes += chunk
+                if len(msg_bytes) != msg_len:
+                    continue
+
+                try:
+                    msg = json.loads(msg_bytes.decode('utf-8'))
+                    cmd_type = msg.get('type', '')
+                    cmd_data = msg.get('data', '')
+
+                    for ag in agents:
+                        if cmd_type == 'START':
+                            ag.log('>>> Reward tracking STARTED')
+                        elif cmd_type == 'STOP':
+                            ag.log('>>> Reward tracking STOPPED')
+                        elif cmd_type == 'RESET':
+                            ag.log(f'>>> RESET: {cmd_data}')
+                            ag.total_reward = 0.0
+                            ag.frame.after(0, lambda a=ag: a.reward_var.set("Reward: 0.0"))
+                except Exception as e:
+                    print(f"Command parse error: {e}")
+        except Exception:
+            # Ignore transient errors and continue listening
+            continue
+
+
+class AgentManager:
+    def __init__(self, root):
+        self.root = root
+        self.agents = []
+        
+        # Scrollable frame for agents
+        canvas = tk.Canvas(root)
+        scrollbar = ttk.Scrollbar(root, orient="horizontal", command=canvas.xview)
+        self.agent_frame = ttk.Frame(canvas)
+        
+        canvas.configure(xscrollcommand=scrollbar.set)
+        scrollbar.pack(side="bottom", fill="x")
+        canvas.pack(side="top", fill="both", expand=True)
+        canvas.create_window((0, 0), window=self.agent_frame, anchor="nw")
+        
+        self.agent_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
+        
+        # Control panel
+        control = ttk.Frame(root)
+        control.pack(side="bottom", pady=5)
+        ttk.Button(control, text="+ Add Agent", command=self.add_agent).pack(side="left", padx=5)
+        ttk.Button(control, text="- Remove Last", command=self.remove_agent).pack(side="left", padx=5)
+        
+        # Start with 2 agents
+        self.add_agent()
+        self.add_agent()
+    
+    def add_agent(self):
+        agent_num = len(self.agents) + 1
+        port = 9999 + len(self.agents)
+        name = f"Agent {agent_num}"
+        agent = AgentController(self.agent_frame, name, port)
+        self.agents.append(agent)
+        print(f"Added {name} on port {port}")
+    
+    def remove_agent(self):
+        if len(self.agents) > 1:
+            agent = self.agents.pop()
+            agent.stop()
+            agent.frame.destroy()
+            print(f"Removed {agent.name}")
 
 if __name__ == '__main__':
     root = tk.Tk()
-    root.title("Dual Agent Control")
-    root.geometry("800x600")
+    root.title("Multi-Agent PVP Training")
+    root.geometry("1200x700")
     
-    AgentController(root, "Agent 1", 9999)
-    AgentController(root, "Agent 2", 10000)
+    manager = AgentManager(root)
+    
+    # Start command listener thread
+    threading.Thread(target=command_listener, args=(manager.agents,), daemon=True).start()
     
     root.mainloop()

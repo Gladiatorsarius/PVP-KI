@@ -3,100 +3,39 @@ package com.example;
 import com.google.gson.Gson;
 import com.google.gson.JsonObject;
 
-import java.io.*;
+import java.io.DataOutputStream;
 import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Server-side IPC client to send commands to Python training loop
+ * Server-side IPC client to send commands to Python training loop on a dedicated command port.
  */
 public class ServerIPCClient {
+    private static final int COMMAND_PORT = 10001; // Dedicated command channel
     private static final Gson GSON = new Gson();
-    private static Socket socket = null;
-    private static DataOutputStream out = null;
-    private static DataInputStream in = null;
-    private static final Object lock = new Object();
 
     /**
-     * Send a command to Python via IPC
+     * Send a command to Python via command socket.
      */
     public static void sendCommand(String eventType, String details) {
-        synchronized (lock) {
-            try {
-                // If not connected, try to connect
-                if (socket == null || socket.isClosed()) {
-                    connect();
-                }
+        try (Socket socket = new Socket("127.0.0.1", COMMAND_PORT);
+             DataOutputStream out = new DataOutputStream(socket.getOutputStream())) {
 
-                if (out != null && socket != null && !socket.isClosed()) {
-                    JsonObject msg = new JsonObject();
-                    msg.addProperty("type", eventType);
-                    msg.addProperty("data", details);
+            JsonObject msg = new JsonObject();
+            msg.addProperty("type", eventType);
+            msg.addProperty("data", details);
 
-                    String json = GSON.toJson(msg);
-                    byte[] jsonBytes = json.getBytes(StandardCharsets.UTF_8);
-
-                    // Send Length (4 bytes int)
-                    out.writeInt(jsonBytes.length);
-                    // Send JSON
-                    out.write(jsonBytes);
-                    out.flush();
-
-                    System.out.println("[ServerIPC] Sent: " + eventType + " - " + details);
-                }
-            } catch (IOException e) {
-                System.err.println("[ServerIPC] Error sending command: " + e.getMessage());
-                disconnect();
-            }
-        }
-    }
-
-    /**
-     * Connect to Python IPC server (port 9999 or 10000 depending on active agent)
-     */
-    private static void connect() {
-        try {
-            // Try port 9999 first (Agent 1), then 10000 (Agent 2)
-            int[] ports = {9999, 10000};
-            for (int port : ports) {
-                try {
-                    socket = new Socket("localhost", port);
-                    out = new DataOutputStream(socket.getOutputStream());
-                    in = new DataInputStream(socket.getInputStream());
-                    System.out.println("[ServerIPC] Connected to Python on port " + port);
-                    return;
-                } catch (IOException e) {
-                    // Try next port
-                }
-            }
-            System.err.println("[ServerIPC] Could not connect to Python on ports 9999 or 10000");
+            byte[] payload = GSON.toJson(msg).getBytes(StandardCharsets.UTF_8);
+            out.writeInt(payload.length);
+            out.write(payload);
+            out.flush();
+            System.out.println("[ServerIPC] Sent command: " + eventType + " - " + details);
         } catch (Exception e) {
-            System.err.println("[ServerIPC] Connection failed: " + e.getMessage());
+            System.err.println("[ServerIPC] Failed to send command: " + e.getMessage());
         }
     }
 
-    /**
-     * Disconnect from Python
-     */
-    public static void disconnect() {
-        synchronized (lock) {
-            try {
-                if (socket != null && !socket.isClosed()) socket.close();
-                if (out != null) out.close();
-                if (in != null) in.close();
-            } catch (IOException e) {
-                System.err.println("[ServerIPC] Error disconnecting: " + e.getMessage());
-            }
-            socket = null;
-            out = null;
-            in = null;
-        }
-    }
-
-    /**
-     * Check if connected
-     */
     public static boolean isConnected() {
-        return socket != null && !socket.isClosed() && out != null;
+        return true; // fire-and-forget per command
     }
 }
