@@ -20,6 +20,8 @@ public class PVP_KIClient implements ClientModInitializer {
 	public static IPCManager ipcManager;
 	public static JsonObject pendingAction;
 	public static final List<String> eventQueue = Collections.synchronizedList(new ArrayList<>());
+	public static final List<String> teamMembers = Collections.synchronizedList(new ArrayList<>());
+	public static int currentAgentId = 1; // Current agent this client is mapped to
 
 	@Override
 	public void onInitializeClient() {
@@ -103,16 +105,68 @@ public class PVP_KIClient implements ClientModInitializer {
 							return 1;
 						}))));
 
-			// Client-side /agent <1|2> (switches IPC port locally)
+			// Client-side /agent <id> (switches IPC port locally, supports unlimited agents)
 			dispatcher.register(ClientCommandManager.literal("agent")
-				.then(ClientCommandManager.argument("id", IntegerArgumentType.integer(1, 2))
+				.then(ClientCommandManager.argument("id", IntegerArgumentType.integer(1, 100))
 					.executes(context -> {
 						int id = IntegerArgumentType.getInteger(context, "id");
-						int port = (id == 1) ? 9999 : 10000;
+						int port = 9999 + (id - 1);
+						// Skip command port 10001
+						if (port >= 10001) {
+							port++;
+						}
 						
+						currentAgentId = id;
 						startIPC(port);
 						
+						// Send MAP command to Python (player_name, agent_id will be injected in headers)
+						Minecraft mc = Minecraft.getInstance();
+						if (mc.player != null) {
+							// Headers will include player_name and agent_id automatically
+						}
+						
 						context.getSource().sendFeedback(Component.literal("Switched to Agent " + id + " (Port " + port + ")"));
+						return 1;
+					})));
+			
+			// Client-side /team commands
+			dispatcher.register(ClientCommandManager.literal("team")
+				.then(ClientCommandManager.literal("add")
+					.then(ClientCommandManager.argument("player", StringArgumentType.string())
+						.executes(context -> {
+							String playerName = StringArgumentType.getString(context, "player");
+							if (!teamMembers.contains(playerName)) {
+								teamMembers.add(playerName);
+								context.getSource().sendFeedback(Component.literal("Added " + playerName + " to team"));
+							} else {
+								context.getSource().sendFeedback(Component.literal(playerName + " is already in team"));
+							}
+							return 1;
+						})))
+				.then(ClientCommandManager.literal("remove")
+					.then(ClientCommandManager.argument("player", StringArgumentType.string())
+						.executes(context -> {
+							String playerName = StringArgumentType.getString(context, "player");
+							if (teamMembers.remove(playerName)) {
+								context.getSource().sendFeedback(Component.literal("Removed " + playerName + " from team"));
+							} else {
+								context.getSource().sendFeedback(Component.literal(playerName + " is not in team"));
+							}
+							return 1;
+						})))
+				.then(ClientCommandManager.literal("list")
+					.executes(context -> {
+						if (teamMembers.isEmpty()) {
+							context.getSource().sendFeedback(Component.literal("Team is empty"));
+						} else {
+							context.getSource().sendFeedback(Component.literal("Team members: " + String.join(", ", teamMembers)));
+						}
+						return 1;
+					}))
+				.then(ClientCommandManager.literal("clear")
+					.executes(context -> {
+						teamMembers.clear();
+						context.getSource().sendFeedback(Component.literal("Team cleared"));
 						return 1;
 					})));
 		});
