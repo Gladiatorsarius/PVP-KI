@@ -8,14 +8,17 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 from model import PVPModel
+from ppo_trainer import PPOTrainer, ExperienceBuffer
 
 class AgentController:
-    def __init__(self, parent, name, port):
+    def __init__(self, parent, name, port, shared_model=None, ppo_trainer=None):
         self.name = name
         self.port = port
         self.running = False
         self.stop_event = threading.Event()
         self.thread = None
+        self.shared_model = shared_model
+        self.ppo_trainer = ppo_trainer
 
         # UI Frame
         self.frame = ttk.LabelFrame(parent, text=f"{name} (Port {port})")
@@ -119,10 +122,17 @@ class AgentController:
 
         if self.stop_event.is_set(): return
 
-        model = PVPModel()
-        model.eval()
+        # Use shared model if available, otherwise create local
+        if self.shared_model is not None:
+            model = self.shared_model
+            model.train()  # Training mode for PPO
+        else:
+            model = PVPModel()
+            model.eval()
+        
         last_health = 20.0
         self.total_reward = 0.0  # Reset reward at start
+        last_state = None
 
         try:
             while not self.stop_event.is_set():
@@ -181,21 +191,56 @@ class AgentController:
                 # Inference
                 w, h = header['width'], header['height']
                 img = np.frombuffer(img_data, dtype=np.uint8).reshape((h, w, 3))
-                t = torch.from_numpy(img).permute(2, 0, 1).float().unsqueeze(0) / 255.0
+                state_tensor = torch.from_numpy(img).permute(2, 0, 1).float().unsqueeze(0) / 255.0
                 
+                # Forward pass through model
                 with torch.no_grad():
-                    logits, look, val = model(t)
+                    move_logits, look_delta, value = model(state_tensor)
                 
-                probs = torch.sigmoid(logits[0])
-                acts = (probs > 0.5).int().tolist()
-                look = look[0].tolist()
+                # Sample actions from distributions
+                move_dist = torch.distributions.Categorical(logits=move_logits)
+                look_dist = torch.distributions.Normal(look_delta, 1.0)
+                
+                action_move = move_dist.sample()
+                action_look = look_dist.sample()
+                
+                log_prob_move = move_dist.log_prob(action_move)
+                log_prob_look = look_dist.log_prob(action_look).sum()
+                
+                # Convert to boolean actions
+                acts = [False] * 6
+                move_idx = action_move.item()
+                if move_idx < 6:
+                    acts[move_idx] = True
+                
+                look = action_look[0].tolist()
 
                 resp = {
-                    'forward': bool(acts[0]), 'left': bool(acts[1]),
-                    'back': bool(acts[2]), 'right': bool(acts[3]),
-                    'jump': bool(acts[4]), 'attack': bool(acts[5]),
+                    'forward': acts[0], 'left': acts[1],
+                    'back': acts[2], 'right': acts[3],
+                    'jump': acts[4], 'attack': acts[5],
                     'yaw': float(look[0]), 'pitch': float(look[1])
                 }
+                
+                # Collect experience for PPO training
+                done = (curr_health <= 0)  # Episode ends on death
+                if self.ppo_trainer is not None and last_state is not None:
+                    self.ppo_trainer.buffer.add(
+                        last_state, action_move.item(), action_look[0], 
+                        reward, done, log_prob_move, log_prob_look, value
+                    )
+                    
+                    # Trigger PPO update if buffer is full
+                    if len(self.ppo_trainer.buffer) >= self.ppo_trainer.batch_size:
+                        metrics = self.ppo_trainer.update()
+                        if metrics:
+                            self.log(f"PPO Update: Loss={metrics['total_loss']:.4f}")
+                    
+                    # On fight end, trigger autosave
+                    if done:
+                        self.ppo_trainer.on_fight_end()
+                
+                last_state = state_tensor
                 
                 rb = json.dumps(resp).encode('utf-8')
                 client.sendall(struct.pack('>H', len(rb)) + rb)
@@ -340,6 +385,11 @@ class AgentManager:
         self.root = root
         self.agents = []
         
+        # Shared model and PPO trainer
+        self.shared_model = PVPModel()
+        self.ppo_trainer = PPOTrainer(self.shared_model)
+        print(f"Initialized shared model and PPO trainer")
+        
         # Scrollable frame for agents
         canvas = tk.Canvas(root)
         scrollbar = ttk.Scrollbar(root, orient="horizontal", command=canvas.xview)
@@ -352,15 +402,26 @@ class AgentManager:
         
         self.agent_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         
+        # Training metrics frame
+        metrics_frame = ttk.LabelFrame(root, text="Training Metrics")
+        metrics_frame.pack(side="bottom", fill="x", padx=10, pady=5)
+        
+        self.metrics_var = tk.StringVar(value="No training data yet")
+        ttk.Label(metrics_frame, textvariable=self.metrics_var, font=("Arial", 10)).pack(padx=5, pady=5)
+        
         # Control panel
         control = ttk.Frame(root)
         control.pack(side="bottom", pady=5)
         ttk.Button(control, text="+ Add Agent", command=self.add_agent).pack(side="left", padx=5)
         ttk.Button(control, text="- Remove Last", command=self.remove_agent).pack(side="left", padx=5)
+        ttk.Button(control, text="Save Model", command=self.save_model).pack(side="left", padx=5)
         
         # Start with 2 agents
         self.add_agent()
         self.add_agent()
+        
+        # Start metrics update thread
+        self.update_metrics_display()
     
     def apply_rewards_to_all(self, source_agent):
         """Copy reward config from source agent to all other agents"""
@@ -381,7 +442,7 @@ class AgentManager:
         if port == 10001:  # Skip command port
             port = 10002
         name = f"Agent {agent_num}"
-        agent = AgentController(self.agent_frame, name, port)
+        agent = AgentController(self.agent_frame, name, port, self.shared_model, self.ppo_trainer)
         agent.manager = self  # Set reference to manager
         self.agents.append(agent)
         print(f"Added {name} on port {port}")
@@ -392,6 +453,26 @@ class AgentManager:
             agent.stop()
             agent.frame.destroy()
             print(f"Removed {agent.name}")
+    
+    def save_model(self):
+        """Manually save the model checkpoint"""
+        filename = self.ppo_trainer.save_checkpoint()
+        print(f"Model saved to {filename}")
+    
+    def update_metrics_display(self):
+        """Update the metrics display periodically"""
+        summary = self.ppo_trainer.get_metrics_summary()
+        if isinstance(summary, dict):
+            metrics_text = (f"Fights: {summary['fights']} | Updates: {summary['updates']} | "
+                          f"Policy Loss: {summary['avg_policy_loss']:.4f} | "
+                          f"Value Loss: {summary['avg_value_loss']:.4f} | "
+                          f"Entropy: {summary['avg_entropy']:.4f}")
+            self.metrics_var.set(metrics_text)
+        else:
+            self.metrics_var.set(summary)
+        
+        # Schedule next update
+        self.root.after(1000, self.update_metrics_display)
 
 if __name__ == '__main__':
     root = tk.Tk()
