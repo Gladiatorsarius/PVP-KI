@@ -230,13 +230,13 @@ class AgentController:
             self.log(f"Command error: {e}")
 
 
-def command_listener(agents, port=10001, bind_host='0.0.0.0'):
+def command_listener(agents, port=10001, bind_host='127.0.0.1'):
     """Listen for START/STOP/RESET commands from the Minecraft mod on a dedicated port.
     
     Args:
         agents: List of AgentController instances
         port: Port to bind to (default 10001)
-        bind_host: Host to bind to - '0.0.0.0' for cloud/remote access, '127.0.0.1' for local only
+        bind_host: Host to bind to - '0.0.0.0' for cloud/remote access, '127.0.0.1' for local only (default)
     """
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

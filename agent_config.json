@@ -2,8 +2,8 @@
   "comment": "Configuration for agent connections. Set 'host' to cloud IP for remote agents.",
   "command_listener": {
     "port": 10001,
-    "bind_host": "0.0.0.0",
-    "comment": "bind_host: '0.0.0.0' for cloud/remote, '127.0.0.1' for local only"
+    "bind_host": "127.0.0.1",
+    "comment": "bind_host: '127.0.0.1' for local only (secure default), '0.0.0.0' for cloud/remote"
   },
   "agents": [
     {
