@@ -85,6 +85,26 @@ public class IPCManager implements Runnable {
                     state.put("cmd_type", cmd.type);
                     state.put("cmd_data", cmd.data);
                 }
+                
+                // Inject player_name and agent_id for agent mapping
+                net.minecraft.client.Minecraft mc = net.minecraft.client.Minecraft.getInstance();
+                if (mc.player != null) {
+                    state.put("player_name", mc.player.getName().getString());
+                    state.put("agent_id", PVP_KIClient.currentAgentId);
+                }
+                
+                // Inject teams data (map of player names to team/enemy/null)
+                Map<String, String> teams = new HashMap<>();
+                synchronized (PVP_KIClient.teamMembers) {
+                    // Mark team members as "team"
+                    for (String teamMember : PVP_KIClient.teamMembers) {
+                        teams.put(teamMember, "team");
+                    }
+                    
+                    // Mark other visible players as "enemy" (TODO: get from world)
+                    // For now, just send team members
+                }
+                state.put("teams", teams);
 
                 // Add body length
                 state.put("bodyLength", frameBytes.length);
