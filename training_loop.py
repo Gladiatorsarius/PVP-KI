@@ -8,9 +8,13 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 from model import PVPModel
+from ppo_trainer import PPOTrainer
 
 # Global agent-player mapping
 agent_mapping = {}  # {"playerName": agent_id}
+
+# Shared PPO trainer (initialized later)
+ppo_trainer = None
 
 class AgentController:
     def __init__(self, parent, name, port):
@@ -264,7 +268,7 @@ class AgentController:
             self.log(f"Command error: {e}")
 
 
-def command_listener(agents, port=10001):
+def command_listener(agents, manager=None, port=10001):
     """Listen for START/STOP/RESET commands from the Minecraft mod on a dedicated port."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -331,6 +335,12 @@ def command_listener(agents, port=10001):
                             ag.log(f'>>> RESET: {cmd_data}')
                             ag.total_reward = 0.0
                             ag.frame.after(0, lambda a=ag: a.reward_var.set("Reward: 0.0"))
+                    
+                    # Handle fight end on RESET (triggers autosave)
+                    if cmd_type == 'RESET' and ppo_trainer:
+                        ppo_trainer.on_fight_end()
+                        if manager:
+                            manager.root.after(0, lambda: manager.update_fight_count(ppo_trainer.fight_count))
                 except Exception as e:
                     print(f"Command parse error: {e}")
         except Exception:
@@ -361,6 +371,11 @@ class AgentManager:
         ttk.Button(control, text="+ Add Agent", command=self.add_agent).pack(side="left", padx=5)
         ttk.Button(control, text="- Remove Last", command=self.remove_agent).pack(side="left", padx=5)
         ttk.Button(control, text="Apply Agent 1 Config to All", command=self.apply_to_all).pack(side="left", padx=5)
+        ttk.Button(control, text="Save Checkpoint", command=self.save_checkpoint).pack(side="left", padx=5)
+        
+        # Fight counter display
+        self.fight_label = tk.StringVar(value="Fights: 0")
+        ttk.Label(control, textvariable=self.fight_label, font=("Arial", 10, "bold")).pack(side="left", padx=10)
         
         # Start with 2 agents
         self.add_agent()
@@ -400,8 +415,25 @@ class AgentManager:
             agent.team_kill_penalty.set(source.team_kill_penalty.get())
         
         print("Applied Agent 1's config to all agents")
+    
+    def save_checkpoint(self):
+        """Manually save a checkpoint"""
+        global ppo_trainer
+        if ppo_trainer:
+            ppo_trainer.save_checkpoint()
+        else:
+            print("PPO trainer not initialized")
+    
+    def update_fight_count(self, count):
+        """Update fight counter display"""
+        self.fight_label.set(f"Fights: {count}")
 
 if __name__ == '__main__':
+    # Initialize shared PPO trainer with shared model
+    shared_model = PVPModel()
+    ppo_trainer = PPOTrainer(shared_model)
+    print(f"[PPO] Initialized shared trainer")
+    
     root = tk.Tk()
     root.title("Multi-Agent PVP Training")
     root.geometry("1200x700")
@@ -409,6 +441,6 @@ if __name__ == '__main__':
     manager = AgentManager(root)
     
     # Start command listener thread
-    threading.Thread(target=command_listener, args=(manager.agents,), daemon=True).start()
+    threading.Thread(target=command_listener, args=(manager.agents, manager), daemon=True).start()
     
     root.mainloop()
