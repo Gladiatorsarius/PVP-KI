@@ -30,6 +30,8 @@ class AgentController:
         self.damage_dealt = self.create_input(config_frame, "Dmg Dealt:", "10.0")
         self.damage_taken = self.create_input(config_frame, "Dmg Taken:", "-10.0")
         self.time_penalty = self.create_input(config_frame, "Time:", "-0.1")
+        self.team_hit_penalty = self.create_input(config_frame, "Team Hit:", "-50.0")
+        self.team_kill_penalty = self.create_input(config_frame, "Team Kill:", "-500.0")
 
         # Controls
         btn_frame = ttk.Frame(self.frame)
@@ -40,6 +42,9 @@ class AgentController:
         
         self.stop_btn = ttk.Button(btn_frame, text="Stop", command=self.stop, state="disabled")
         self.stop_btn.pack(side="left", padx=5)
+        
+        self.apply_all_btn = ttk.Button(btn_frame, text="Apply to All", command=lambda: self.apply_to_all())
+        self.apply_all_btn.pack(side="left", padx=5)
 
         # Status
         self.status_var = tk.StringVar(value="Status: Stopped")
@@ -225,12 +230,23 @@ class AgentController:
                 self.frame.after(0, lambda: self.reward_var.set(f"Reward: 0.0"))
         except Exception as e:
             self.log(f"Command error: {e}")
+    
+    def apply_to_all(self):
+        """Copy this agent's reward config to all other agents"""
+        # The manager reference will be set by AgentManager during agent creation
+        if hasattr(self, 'manager'):
+            self.manager.apply_rewards_to_all(self)
+            self.log("Applied config to all agents")
 
 
 def command_listener(agents, port=10001):
-    """Listen for START/STOP/RESET commands from the Minecraft mod on a dedicated port."""
+    """Listen for START/STOP/RESET/HIT/DEATH/MAP commands from the Minecraft mod on a dedicated port."""
     sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    
+    # Global agent-player mapping: {player_name: agent_index}
+    player_to_agent = {}
+    
     try:
         sock.bind(('127.0.0.1', port))
         sock.listen(5)
@@ -262,15 +278,56 @@ def command_listener(agents, port=10001):
                     cmd_type = msg.get('type', '')
                     cmd_data = msg.get('data', '')
 
-                    for ag in agents:
-                        if cmd_type == 'START':
+                    if cmd_type == 'START':
+                        for ag in agents:
                             ag.log('>>> Reward tracking STARTED')
-                        elif cmd_type == 'STOP':
+                    elif cmd_type == 'STOP':
+                        for ag in agents:
                             ag.log('>>> Reward tracking STOPPED')
-                        elif cmd_type == 'RESET':
+                    elif cmd_type == 'RESET':
+                        for ag in agents:
                             ag.log(f'>>> RESET: {cmd_data}')
                             ag.total_reward = 0.0
                             ag.frame.after(0, lambda a=ag: a.reward_var.set("Reward: 0.0"))
+                    elif cmd_type == 'MAP':
+                        # MAP command: "playerName,agentId"
+                        parts = cmd_data.split(',')
+                        if len(parts) == 2:
+                            player_name = parts[0]
+                            agent_id = int(parts[1])
+                            player_to_agent[player_name] = agent_id - 1  # Convert to 0-based index
+                            print(f"Mapped {player_name} -> Agent {agent_id}")
+                    elif cmd_type == 'HIT':
+                        # HIT command: "attackerName,victimName"
+                        parts = cmd_data.split(',')
+                        if len(parts) == 2:
+                            attacker = parts[0]
+                            victim = parts[1]
+                            # Apply rewards to corresponding agents
+                            if attacker in player_to_agent:
+                                ag_idx = player_to_agent[attacker]
+                                if 0 <= ag_idx < len(agents):
+                                    # Attacker gets damage dealt reward
+                                    agents[ag_idx].log(f"HIT dealt to {victim}")
+                            if victim in player_to_agent:
+                                ag_idx = player_to_agent[victim]
+                                if 0 <= ag_idx < len(agents):
+                                    # Victim gets damage taken penalty
+                                    agents[ag_idx].log(f"HIT taken from {attacker}")
+                    elif cmd_type == 'DEATH':
+                        # DEATH command: "victimName,killerName"
+                        parts = cmd_data.split(',')
+                        if len(parts) == 2:
+                            victim = parts[0]
+                            killer = parts[1]
+                            if victim in player_to_agent:
+                                ag_idx = player_to_agent[victim]
+                                if 0 <= ag_idx < len(agents):
+                                    agents[ag_idx].log(f"DEATH by {killer}")
+                            if killer in player_to_agent and killer != "Environment":
+                                ag_idx = player_to_agent[killer]
+                                if 0 <= ag_idx < len(agents):
+                                    agents[ag_idx].log(f"KILL of {victim}")
                 except Exception as e:
                     print(f"Command parse error: {e}")
         except Exception:
@@ -305,11 +362,27 @@ class AgentManager:
         self.add_agent()
         self.add_agent()
     
+    def apply_rewards_to_all(self, source_agent):
+        """Copy reward config from source agent to all other agents"""
+        for agent in self.agents:
+            if agent != source_agent:
+                agent.win_reward.set(source_agent.win_reward.get())
+                agent.loss_penalty.set(source_agent.loss_penalty.get())
+                agent.damage_dealt.set(source_agent.damage_dealt.get())
+                agent.damage_taken.set(source_agent.damage_taken.get())
+                agent.time_penalty.set(source_agent.time_penalty.get())
+                agent.team_hit_penalty.set(source_agent.team_hit_penalty.get())
+                agent.team_kill_penalty.set(source_agent.team_kill_penalty.get())
+                agent.log("Reward config updated from " + source_agent.name)
+    
     def add_agent(self):
         agent_num = len(self.agents) + 1
         port = 9999 + len(self.agents)
+        if port == 10001:  # Skip command port
+            port = 10002
         name = f"Agent {agent_num}"
         agent = AgentController(self.agent_frame, name, port)
+        agent.manager = self  # Set reference to manager
         self.agents.append(agent)
         print(f"Added {name} on port {port}")
     
