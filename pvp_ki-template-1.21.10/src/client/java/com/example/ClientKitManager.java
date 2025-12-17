@@ -8,8 +8,8 @@ import com.google.gson.reflect.TypeToken;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtOps;
+import net.minecraft.world.item.Item;
 import net.minecraft.nbt.Tag;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.resources.RegistryOps;
@@ -137,19 +137,9 @@ public class ClientKitManager {
                         if (result.result().isPresent()) {
                             stack = result.result().get();
                         }
-                    } else if (itemJson.has("nbt")) {
-                        // Legacy support for old format
-                        String nbtStr = itemJson.get("nbt").getAsString();
-                        if (nbtStr.contains("id:")) {
-                            int start = nbtStr.indexOf("id:\"") + 4;
-                            int end = nbtStr.indexOf("\"", start);
-                            String itemId = nbtStr.substring(start, end);
-                            ResourceLocation loc = ResourceLocation.parse(itemId);
-                            var ref = BuiltInRegistries.ITEM.get(loc);
-                            if (ref.isPresent()) {
-                                stack = new ItemStack(ref.get().value());
-                            }
-                        }
+                    } else {
+                        // Old format not supported
+                        System.out.println("[ClientKitManager] Skipping old format item");
                     }
                 } catch (Exception e) {
                     System.err.println("Error parsing item data: " + e.getMessage());
@@ -210,5 +200,9 @@ public class ClientKitManager {
             return true;
         }
         return false;
+    }
+    
+    public static Map<String, List<JsonObject>> getAllKits() {
+        return new HashMap<>(kits);
     }
 }

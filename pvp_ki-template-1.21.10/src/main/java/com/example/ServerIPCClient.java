@@ -11,7 +11,7 @@ import java.nio.charset.StandardCharsets;
  * Server-side IPC client to send commands to Python training loop on a dedicated command port.
  */
 public class ServerIPCClient {
-    private static final int COMMAND_PORT = 10001; // Dedicated command channel
+    private static final int COMMAND_PORT = 9998; // Dedicated command channel (moved from 10001)
     private static final Gson GSON = new Gson();
 
     /**

@@ -43,8 +43,8 @@ public class ExampleClientMixin {
 		// Initialize small target if needed
 		if (smallTarget == null) {
 			// TextureTarget(String name, int width, int height, boolean useDepth)
-			smallTarget = new TextureTarget("pvp_ki_target", TARGET_WIDTH, TARGET_HEIGHT, true);
-			// smallTarget.setClearColor(0.0f, 0.0f, 0.0f, 0.0f); // Removed as it causes compilation error
+			smallTarget = new TextureTarget("pvp_ki_small", TARGET_WIDTH, TARGET_HEIGHT, true);
+			// Note: setClearColor not available in 1.21.11
 		}
 
 		try {

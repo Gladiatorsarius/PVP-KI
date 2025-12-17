@@ -4,7 +4,8 @@
 	"compatibilityLevel": "JAVA_21",
 	"client": [
 		"ExampleClientMixin",
-		"NameTagMixin"
+		"NameTagMixin",
+		"NametagRenderMixin"
 	],
 	"injectors": {
 		"defaultRequire": 1

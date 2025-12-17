@@ -9,8 +9,8 @@ import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.nbt.NbtOps;
 import net.minecraft.nbt.Tag;
-import net.minecraft.resources.ResourceLocation;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.resources.RegistryOps;
 
@@ -135,24 +135,9 @@ public class KitManager {
                         } else if (result.error().isPresent()) {
                             System.err.println("[KitManager] Failed to parse ItemStack: " + result.error().get().message());
                         }
-                    } else if (itemJson.has("nbt")) {
-                        // Old format fallback: string NBT (incomplete, loses data)
-                        System.out.println("[KitManager] WARNING: Loading old format kit (limited data)");
-                        String nbtStr = itemJson.get("nbt").getAsString();
-                        if (nbtStr.contains("id:")) {
-                            int start = nbtStr.indexOf("id:\"") + 4;
-                            int end = nbtStr.indexOf("\"", start);
-                            String itemId = nbtStr.substring(start, end);
-                            try {
-                                ResourceLocation loc = ResourceLocation.parse(itemId);
-                                var ref = BuiltInRegistries.ITEM.get(loc);
-                                if (ref.isPresent()) {
-                                    stack = new ItemStack(ref.get().value());
-                                }
-                            } catch (Exception e) {
-                                System.err.println("[KitManager] Invalid item ID: " + itemId);
-                            }
-                        }
+                    } else {
+                        // Old format not supported in this version
+                        System.out.println("[KitManager] WARNING: Skipping item with unsupported format");
                     }
                 } catch (Exception e) {
                     System.err.println("[KitManager] Error loading item from kit: " + e.getMessage());
@@ -202,5 +187,10 @@ public class KitManager {
         if (kits.isEmpty()) return null;
         List<String> keys = new ArrayList<>(kits.keySet());
         return keys.get(new Random().nextInt(keys.size()));
+    }
+    
+    public static void clearAllKits() {
+        kits.clear();
+        saveKits();
     }
 }

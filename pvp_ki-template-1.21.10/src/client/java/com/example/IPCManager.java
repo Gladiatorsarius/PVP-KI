@@ -79,8 +79,8 @@ public class IPCManager implements Runnable {
                     PVP_KIClient.eventQueue.clear();
                 }
 
-                // Check for pending server commands and inject into header
-                CommandQueue.ServerCommand cmd = CommandQueue.dequeue();
+                // Check for pending client commands and inject into header
+                ClientCommandQueue.IPCCommand cmd = ClientCommandQueue.dequeue();
                 if (cmd != null) {
                     state.put("cmd_type", cmd.type);
                     state.put("cmd_data", cmd.data);
@@ -101,8 +101,16 @@ public class IPCManager implements Runnable {
                         teams.put(teamMember, "team");
                     }
                     
-                    // Mark other visible players as "enemy" (TODO: get from world)
-                    // For now, just send team members
+                    // Mark other visible players as "enemy"
+                    if (mc.level != null && mc.player != null) {
+                        String localPlayerName = mc.player.getName().getString();
+                        for (net.minecraft.world.entity.player.Player player : mc.level.players()) {
+                            String playerName = player.getName().getString();
+                            if (!playerName.equals(localPlayerName) && !PVP_KIClient.teamMembers.contains(playerName)) {
+                                teams.put(playerName, "enemy");
+                            }
+                        }
+                    }
                 }
                 state.put("teams", teams);
 
@@ -119,6 +127,11 @@ public class IPCManager implements Runnable {
                 // Send Body
                 currentOut.write(frameBytes);
                 currentOut.flush();
+                
+                // Debug: Show frame sent once per connection
+                if (state.containsKey("agent_id")) {
+                    System.out.println("[IPC Port " + port + "] Frame sent to Python (Agent " + state.get("agent_id") + ")");
+                }
             } catch (Exception e) {
                 System.err.println("Error sending frame: " + e.getMessage());
                 active = false; // Assume disconnected
