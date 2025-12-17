@@ -58,29 +58,7 @@ public class PVP_KI implements ModInitializer {
 	LiteralArgumentBuilder<CommandSourceStack> kiRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("ki")
 		.requires(source -> true); // Allow all players
 
-		// /ki start - Start reward tracking
-			kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("start")
-				.executes(context -> {
-					try {
-						ServerIPCClient.sendCommand("START", "Reward tracking started");
-						context.getSource().sendSuccess(() -> Component.literal("Reward tracking started"), false);
-					} catch (Exception e) {
-						context.getSource().sendFailure(Component.literal("Error: " + e.getMessage()));
-					}
-					return 1;
-				}));
-
-			// /ki stop - Stop reward tracking
-			kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("stop")
-				.executes(context -> {
-					try {
-						ServerIPCClient.sendCommand("STOP", "Reward tracking stopped");
-						context.getSource().sendSuccess(() -> Component.literal("Reward tracking stopped"), false);
-					} catch (Exception e) {
-						context.getSource().sendFailure(Component.literal("Error: " + e.getMessage()));
-					}
-					return 1;
-				}));
+        // Note: /ki start/stop removed; reward control is now client-side /reward
 
 		// Server-side /ki createkit <name> - creates kits for /ki reset command
 		kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("createkit")

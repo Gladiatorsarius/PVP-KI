@@ -87,24 +87,24 @@ public class PVP_KIClient implements ClientModInitializer {
 					return 1;
 				}));
 
-		// Client-side /ki commands that work without server mod via IPC
-		dispatcher.register(ClientCommandManager.literal("ki")
+		// Client-side reward control (does not rely on server mod)
+		dispatcher.register(ClientCommandManager.literal("reward")
 			.then(ClientCommandManager.literal("start")
 				.executes(context -> {
 					ClientCommandQueue.enqueue("START", "Reward tracking started");
-					context.getSource().sendFeedback(Component.literal("Sent START command to Python via IPC"));
+					context.getSource().sendFeedback(Component.literal("[reward] START sent to Python"));
 					return 1;
 				}))
 			.then(ClientCommandManager.literal("stop")
 				.executes(context -> {
 					ClientCommandQueue.enqueue("STOP", "Reward tracking stopped");
-					context.getSource().sendFeedback(Component.literal("Sent STOP command to Python via IPC"));
+					context.getSource().sendFeedback(Component.literal("[reward] STOP sent to Python"));
 					return 1;
 				}))
 			.then(ClientCommandManager.literal("reset")
 				.executes(context -> {
 					ClientCommandQueue.enqueue("RESET", "Rewards reset to zero");
-					context.getSource().sendFeedback(Component.literal("Sent RESET command to Python via IPC (no teleport)"));
+					context.getSource().sendFeedback(Component.literal("[reward] RESET sent to Python"));
 					return 1;
 				})));
 

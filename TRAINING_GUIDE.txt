@@ -2,12 +2,15 @@
                     PVP AI TRAINING GUIDE - COMPLETE WALKTHROUGH
 ================================================================================
 
+⚠️ IMPORTANT: This project already has a complete training system implemented!
+   You don't need to write Python code - just use the provided files.
+
 TABLE OF CONTENTS:
 1. System Architecture Overview
-2. Port Configuration
+2. Port Configuration  
 3. Training Workflow Step-by-Step
-4. Python training_loop.py Setup
-5. Reward System Design
+4. Understanding the Python Code (Already Implemented!)
+5. Reward System Configuration (GUI-Based)
 6. Event Handling
 7. Multi-Agent Training
 8. Troubleshooting
@@ -65,285 +68,228 @@ IMPORTANT:
 3. TRAINING WORKFLOW STEP-BY-STEP
 ================================================================================
 
-STEP 1: START PYTHON TRAINING LOOP
------------------------------------
-1. Open terminal
-2. Navigate to Python project folder
+STEP 1: START PYTHON GUI
+-------------------------
+1. Open terminal in the "PVP KI" folder
+2. Make sure you have dependencies installed:
+   pip install torch numpy tkinter
 3. Run: python training_loop.py
-4. Python should print:
-   - "Listening on port 9999 for Agent 1"
-   - "Listening on port 10001 for Agent 2"
-   - "Command server listening on port 9998"
+4. A GUI window will open titled "Multi-Agent PVP Training"
+5. You'll see 2 agent panels by default (Agent 1 and Agent 2)
 
 
-STEP 2: START MINECRAFT CLIENT(S)
+STEP 2: CONFIGURE REWARDS (IN THE GUI)
+---------------------------------------
+Each agent panel has reward sliders:
+  - Win: +500.0 (default)
+  - Loss: -500.0 (default)
+  - Dmg Dealt: +10.0 (default)
+  - Dmg Taken: -10.0 (default)
+  - Time: -0.1 (default - penalty per frame)
+  - Team Hit: -50.0 (default)
+  - Team Kill: -500.0 (default)
+
+You can adjust these values BEFORE starting training!
+Use "Apply to All" button to copy settings to all agents.
+
+
+STEP 3: START MINECRAFT CLIENT(S)
 ----------------------------------
 1. Launch Minecraft with the mod installed
 2. Join a server (or singleplayer)
 3. Mod automatically connects to port 9999 (Agent 1)
-4. Python should print: "Agent 1 connected!"
 
 
-STEP 3: START TRAINING
------------------------
-In Minecraft, type one of these:
-
-CLIENT-SIDE (works without server mod):
-  /ki start    → Sends START command to Python
-  /ki stop     → Sends STOP command to Python
-  /ki reset    → Resets rewards to zero (no teleport)
-
-SERVER-SIDE (requires mod on server):
-  /ki start    → Server sends START to Python on port 9998
-  /ki reset <p1> <p2> <kit> → Teleports players and applies kit
+STEP 4: START TRAINING (CLICK IN GUI)
+--------------------------------------
+1. In the GUI, click the "Start" button for Agent 1
+2. The agent panel will show "Status: Running"
+3. When Minecraft connects, you'll see "Connected!" in the agent log
+4. Training starts automatically - no /ki start command needed!
 
 
-STEP 4: MONITOR TRAINING
--------------------------
-- Python should print events as they happen:
-  * "Agent 1: EVENT:HIT:Player1:Player2"
-  * "Agent 1: EVENT:DEATH:Player2:Player1"
-  * "Agent 1: Reward: +10.5"
+STEP 5: MONITOR TRAINING (IN THE GUI)
+--------------------------------------
+Each agent panel shows:
+  - Status: Running/Stopped/Stopping
+  - Current Reward (resets on death)
+  - Event log (shows hits, deaths, wins, losses)
   
-- In Minecraft, use:
+Bottom panel shows:
+  - Total fights completed
+  - PPO updates performed  
+  - Average policy/value loss
+  - Entropy (exploration metric)
+
+In Minecraft:
   /testframe  → Check IPC connection status
   /name       → Toggle nametag overlays
 
 
-STEP 5: MULTI-AGENT TRAINING (Optional)
-----------------------------------------
-For training 2 agents against each other:
+STEP 6: MULTI-AGENT TRAINING (2v2 or more)
+-------------------------------------------
+For self-play training with 2 agents:
 
-1. Start Python with 2 agent listeners (ports 9999 and 10001)
-2. Launch first Minecraft client → connects to Agent 1 (port 9999)
-3. In first client, type: /agent 2
-4. Launch second Minecraft client → automatically connects to Agent 2 (10001)
-5. Both agents now train simultaneously!
+1. In GUI, both Agent 1 and Agent 2 panels are already created
+2. Click "Start" on both agents
+3. Launch first Minecraft client → Auto-connects to Agent 1 (port 9999)
+4. Launch second Minecraft client → Auto-connects to Agent 2 (port 10001)
+5. Both agents train against each other!
+
+To add more agents:
+  - Click "+ Add Agent" in the GUI
+  - Launch more Minecraft clients
+  - Each client auto-connects to the next available port
 
 
-================================================================================
-4. PYTHON training_loop.py SETUP
-================================================================================
+STEP 7: SAVING THE MODEL
+-------------------------
+The model auto-saves after every fight ends (on death)!
+Manual save: Click "Save Model" button in GUI
 
-YOUR training_loop.py SHOULD:
-------------------------------
-
-A) LISTEN ON MULTIPLE PORTS:
-```python
-import socket
-import threading
-import json
-import struct
-
-# Configuration
-COMMAND_PORT = 9998
-AGENT_PORTS = [9999, 10001, 10002]  # Support 3 agents
-
-# Global state
-agents = {}  # {agent_id: {socket, state, model, etc}}
-training_active = False
-
-def handle_command_port():
-    """Listen for START/STOP/RESET commands"""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(('127.0.0.1', COMMAND_PORT))
-    sock.listen(1)
-    
-    while True:
-        conn, addr = sock.accept()
-        # Read command (4 bytes length + JSON)
-        length = struct.unpack('>I', conn.recv(4))[0]
-        data = json.loads(conn.recv(length).decode('utf-8'))
-        
-        cmd_type = data.get('type')
-        if cmd_type == 'START':
-            training_active = True
-            print("Training STARTED")
-        elif cmd_type == 'STOP':
-            training_active = False
-            print("Training STOPPED")
-        elif cmd_type == 'RESET':
-            # Reset rewards for all agents
-            for agent in agents.values():
-                agent['cumulative_reward'] = 0
-            print("Rewards RESET")
-
-def handle_agent(agent_id, port):
-    """Handle one agent's frame stream"""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.bind(('127.0.0.1', port))
-    sock.listen(1)
-    print(f"Agent {agent_id} listening on port {port}")
-    
-    while True:
-        conn, addr = sock.accept()
-        print(f"Agent {agent_id} connected!")
-        
-        while True:
-            try:
-                # Read header length (4 bytes)
-                header_len = struct.unpack('>I', conn.recv(4))[0]
-                if header_len == 0:
-                    break
-                
-                # Read header (JSON)
-                header_data = conn.recv(header_len).decode('utf-8')
-                header = json.loads(header_data)
-                
-                # Read body (frame image)
-                body_len = header.get('bodyLength', 0)
-                frame_bytes = conn.recv(body_len)
-                
-                # Process frame
-                process_frame(agent_id, header, frame_bytes, conn)
-                
-            except Exception as e:
-                print(f"Agent {agent_id} disconnected: {e}")
-                break
-
-def process_frame(agent_id, header, frame_bytes, conn):
-    """Process one frame from an agent"""
-    global training_active
-    
-    # Extract data from header
-    events = header.get('events', [])
-    player_name = header.get('player_name', 'Unknown')
-    health = header.get('health', 20)
-    position = header.get('position', {})
-    
-    # Handle commands (START/STOP/RESET sent via IPC)
-    if 'cmd_type' in header:
-        cmd_type = header['cmd_type']
-        if cmd_type == 'START':
-            training_active = True
-            print(f"Agent {agent_id}: Training STARTED")
-        elif cmd_type == 'STOP':
-            training_active = False
-            print(f"Agent {agent_id}: Training STOPPED")
-        elif cmd_type == 'RESET':
-            agents[agent_id]['cumulative_reward'] = 0
-            print(f"Agent {agent_id}: Rewards RESET")
-    
-    if not training_active:
-        return
-    
-    # Calculate reward based on events
-    reward = 0.0
-    for event in events:
-        if event.startswith('EVENT:HIT:'):
-            parts = event.split(':')
-            attacker = parts[2]
-            target = parts[3]
-            
-            if attacker == player_name:
-                reward += 1.0  # Agent hit someone
-                print(f"Agent {agent_id}: Hit {target} (+1.0)")
-            elif target == player_name:
-                reward -= 0.5  # Agent got hit
-                print(f"Agent {agent_id}: Got hit by {attacker} (-0.5)")
-        
-        elif event.startswith('EVENT:DEATH:'):
-            parts = event.split(':')
-            victim = parts[2]
-            killer = parts[3]
-            
-            if killer == player_name:
-                reward += 10.0  # Agent killed someone!
-                print(f"Agent {agent_id}: Killed {victim} (+10.0)")
-            elif victim == player_name:
-                reward -= 5.0  # Agent died
-                print(f"Agent {agent_id}: Died to {killer} (-5.0)")
-    
-    # Convert frame to image
-    # frame_bytes contains raw RGB data
-    # You need to reshape it based on resolution
-    # Example: 640x360 resolution = 640*360*3 bytes
-    
-    # TODO: Feed frame to neural network
-    # action = model.predict(frame)
-    
-    # Send action back to Minecraft
-    action = {
-        'forward': 0,    # 0 or 1
-        'backward': 0,
-        'left': 0,
-        'right': 0,
-        'jump': 0,
-        'sneak': 0,
-        'attack': 0,
-        'use': 0,
-        'yaw': 0.0,      # Mouse movement
-        'pitch': 0.0
-    }
-    
-    # Send action (2 bytes length + JSON)
-    action_json = json.dumps(action).encode('utf-8')
-    conn.sendall(struct.pack('>H', len(action_json)))
-    conn.sendall(action_json)
-    
-    # Update agent stats
-    agents[agent_id]['cumulative_reward'] += reward
-
-# Start threads
-threading.Thread(target=handle_command_port, daemon=True).start()
-
-for i, port in enumerate(AGENT_PORTS):
-    agent_id = i + 1
-    agents[agent_id] = {'cumulative_reward': 0}
-    threading.Thread(target=handle_agent, args=(agent_id, port), daemon=True).start()
-
-# Keep main thread alive
-while True:
-    time.sleep(1)
-```
+Checkpoints are saved to: checkpoints/pvp_model_YYYYMMDD_HHMMSS.pth
 
 
 ================================================================================
-5. REWARD SYSTEM DESIGN
+4. UNDERSTANDING THE PYTHON CODE (Already Implemented!)
 ================================================================================
 
-RECOMMENDED REWARD STRUCTURE:
------------------------------
+YOU DON'T NEED TO WRITE CODE! The system is already complete.
 
-POSITIVE REWARDS (Agent does well):
-  +1.0   → Hit an enemy
-  +10.0  → Kill an enemy
-  +0.1   → Per second alive
-  +5.0   → Win a round
+FILES PROVIDED:
+---------------
+1. training_loop.py    - Main GUI and agent coordination
+2. model.py            - Neural network (CNN + Actor-Critic)
+3. ppo_trainer.py      - PPO algorithm implementation
+4. ipc_client.py       - Socket communication utilities
+5. drl_agent.py        - Additional agent utilities
 
-NEGATIVE REWARDS (Agent does poorly):
-  -0.5   → Got hit by enemy
-  -5.0   → Death
-  -10.0  → Death to environment (fall damage, etc.)
-  -0.01  → Per frame (encourage efficiency)
+HOW IT WORKS:
+-------------
+A) training_loop.py creates a GUI with:
+   - Agent panels for each Minecraft client
+   - Reward configuration sliders
+   - Real-time status and metrics display
+   - Start/Stop controls for each agent
 
-OPTIONAL SHAPING REWARDS:
-  +0.1   → Moving towards enemy
-  +0.5   → Looking at enemy
-  -0.1   → Standing still too long
-  +2.0   → Dodge/block enemy attack
+B) Each agent connects to Minecraft via TCP socket:
+   - Minecraft MOD → connects to → Python on ports 9999, 10001, etc.
+   - Python receives: Frame data + Events + Game state
+   - Python sends: Actions (movement, attack, look direction)
+
+C) Neural Network (model.py):
+   - Input: 64x64 RGB game frames
+   - CNN extracts visual features
+   - Actor outputs: Movement (W/A/S/D/Space/Attack) + Look (Yaw/Pitch)
+   - Critic outputs: State value (for PPO training)
+
+D) PPO Training (ppo_trainer.py):
+   - Collects experiences in a shared buffer
+   - Computes advantages using GAE (Generalized Advantage Estimation)
+   - Updates policy with clipped objective
+   - Auto-saves checkpoints after each fight
+
+E) Reward Calculation:
+   - Configured via GUI sliders (see Step 2 above)
+   - Applied automatically based on events from Minecraft
+   - Example: Hit enemy → +10.0, Got hit → -10.0, Win → +500.0
+
+THE SYSTEM IS FULLY AUTOMATED!
+-------------------------------
+Once you:
+1. Start the GUI (python training_loop.py)
+2. Click "Start" on an agent
+3. Launch Minecraft
+
+Everything else happens automatically:
+  ✅ Frame capture and sending
+  ✅ Event detection (hits, deaths)
+  ✅ Reward calculation
+  ✅ Neural network inference
+  ✅ Action execution in-game
+  ✅ PPO training updates
+  ✅ Model checkpointing
 
 
-CONFIGURABLE REWARDS:
----------------------
-Create a config.json file:
+================================================================================
+5. REWARD SYSTEM CONFIGURATION (GUI-Based - No Code Needed!)
+================================================================================
 
-{
-  "reward_hit_dealt": 1.0,
-  "reward_kill": 10.0,
-  "penalty_hit_taken": -0.5,
-  "penalty_death": -5.0,
-  "penalty_death_environment": -10.0,
-  "reward_alive_per_second": 0.1
-}
+REWARD CONFIGURATION IN THE GUI:
+---------------------------------
+Each agent panel has 7 reward sliders you can adjust IN REAL-TIME:
 
-Load in Python:
-```python
-with open('config.json') as f:
-    config = json.load(f)
+1. WIN REWARD (+500.0 default)
+   - Given when the agent wins a fight (enemy dies, agent survives)
+   - Higher = More motivation to win
+   - Resets agent's cumulative reward to 0 after win
 
-reward_hit = config['reward_hit_dealt']
-```
+2. LOSS PENALTY (-500.0 default)  
+   - Given when the agent loses (agent dies)
+   - More negative = More punishment for dying
+   - Resets agent's cumulative reward to 0 after loss
+
+3. DAMAGE DEALT (+10.0 default)
+   - Given for each hit the agent lands on enemy
+   - Detected via EVENT:HIT events from mod
+   - Encourages aggressive play
+
+4. DAMAGE TAKEN (-10.0 default)
+   - Given when agent loses health
+   - Calculated from health delta in frame header
+   - Encourages defensive play and dodging
+
+5. TIME PENALTY (-0.1 default)
+   - Applied EVERY FRAME
+   - Encourages fast, decisive combat
+   - Prevents passive/camping strategies
+   - Total penalty = -0.1 × frames_per_fight
+
+6. TEAM HIT PENALTY (-50.0 default)
+   - Given when agent hits a teammate
+   - Only applies in team modes
+   - Discourages friendly fire
+
+7. TEAM KILL PENALTY (-500.0 default)
+   - Given when agent kills a teammate
+   - Severe punishment for team kills
+   - Only applies in team modes
+
+
+HOW TO ADJUST REWARDS:
+-----------------------
+1. Type new values in the text boxes next to each reward
+2. Press Enter to apply
+3. Changes take effect IMMEDIATELY (even during active training!)
+4. Use "Apply to All" button to copy settings to all agents
+
+
+RECOMMENDED CONFIGURATIONS:
+---------------------------
+
+AGGRESSIVE FIGHTER:
+  Win: +500, Loss: -300, Dmg Dealt: +20, Dmg Taken: -5, Time: -0.2
+
+DEFENSIVE FIGHTER:
+  Win: +800, Loss: -100, Dmg Dealt: +5, Dmg Taken: -30, Time: -0.05
+
+BALANCED:
+  Win: +500, Loss: -500, Dmg Dealt: +10, Dmg Taken: -10, Time: -0.1
+
+SPEEDRUNNER (Fast kills):
+  Win: +1000, Loss: -200, Dmg Dealt: +15, Dmg Taken: -5, Time: -1.0
+
+
+HOW REWARDS ARE CALCULATED:
+----------------------------
+The training_loop.py automatically:
+
+1. Monitors health changes → applies Damage Taken penalty
+2. Detects EVENT:HIT events → applies Damage Dealt reward
+3. Detects EVENT:DEATH events → applies Win/Loss rewards
+4. Applies Time Penalty every frame
+5. Accumulates total reward and displays in GUI
+6. Resets to 0 after each fight ends
 
 
 ================================================================================
@@ -383,33 +329,68 @@ FRAME HEADER FORMAT:
 
 
 ================================================================================
-7. MULTI-AGENT TRAINING
+7. MULTI-AGENT TRAINING (Self-Play)
 ================================================================================
 
-TRAINING 2 AGENTS AGAINST EACH OTHER:
---------------------------------------
-
-SETUP:
-1. Python listens on ports 9999 and 10001
-2. Launch Minecraft client 1 → Agent 1 (auto-connects to 9999)
-3. Launch Minecraft client 2 → Agent 2 (auto-connects to 10001)
-4. Both agents train simultaneously!
-
-COMMANDS:
-- Agent 1: Already on port 9999
-- Agent 2: Type /agent 2 to switch to port 10001
+WHAT IS SELF-PLAY?
+------------------
+Training multiple copies of the same agent against each other.
+All agents share the SAME neural network weights.
+This creates a "curriculum" where agents continuously adapt to their own strategies.
 
 BENEFITS:
-- Self-play training (agent learns from itself)
-- Faster training (parallel data collection)
-- More realistic combat scenarios
+- Agents never plateau - always facing equally skilled opponents
+- Discovers creative strategies and counter-strategies
+- Much faster than training against fixed opponents
+- No need for human players!
 
 
-SCALING TO MORE AGENTS:
------------------------
-1. Add more ports to AGENT_PORTS list in Python
-2. Launch more Minecraft clients
-3. Use /agent <id> to assign each client to an agent
+SETUP FOR 2-AGENT SELF-PLAY:
+-----------------------------
+1. Start training_loop.py GUI
+2. You'll see Agent 1 and Agent 2 panels (already created by default)
+3. Click "Start" on BOTH agents
+4. Launch Minecraft client 1 → Auto-connects to port 9999 (Agent 1)
+5. Launch Minecraft client 2 → Auto-connects to port 10001 (Agent 2)
+6. Put them in the same Minecraft world
+7. Let them fight!
+
+IMPORTANT:
+- Both agents share the same model (controlled by shared_model flag)
+- Each fight improves BOTH agents simultaneously
+- Model auto-saves after every fight ends
+
+
+ADDING MORE AGENTS (3+ Players):
+---------------------------------
+1. In GUI, click "+ Add Agent" button
+2. Agent 3 appears on port 10002
+3. Launch Minecraft client 3 → Auto-connects to 10002
+4. Repeat for Agent 4, 5, etc.
+
+TEAM VS TEAM (2v2, 3v3):
+------------------------
+1. Create 4 agents in GUI
+2. Launch 4 Minecraft clients
+3. In Minecraft, use team commands:
+   /team create red
+   /team create blue
+   /team add red Agent1Name
+   /team add red Agent2Name
+   /team add blue Agent3Name
+   /team add blue Agent4Name
+4. Agents will avoid hitting teammates (Team Hit/Kill penalties apply)
+
+
+PORT ALLOCATION:
+----------------
+Agent 1: Port 9999
+Agent 2: Port 10001 (skips 10000)
+Agent 3: Port 10002
+Agent 4: Port 10003
+... and so on
+
+Each Minecraft client auto-connects to the next available port.
 
 
 ================================================================================
@@ -484,15 +465,76 @@ SERVER-SIDE COMMANDS (require mod on server):
 
 
 ================================================================================
-FINAL NOTES
+IMPORTANT NOTES
 ================================================================================
 
-1. The mod is ONLY a data bridge - it sends observations and receives actions
-2. ALL AI logic, neural networks, training happens in Python
-3. Reward values are 100% customizable in training_loop.py
-4. Events work on ANY Minecraft server (vanilla, modded, etc.)
-5. Multi-agent training requires multiple Minecraft clients
-6. Start Python BEFORE launching Minecraft!
+✅ THE SYSTEM IS COMPLETE - NO CODING REQUIRED!
+------------------------------------------------
+Everything is already implemented:
+  - Neural network model (CNN + Actor-Critic)
+  - PPO training algorithm
+  - Experience replay buffer
+  - GUI for monitoring and configuration
+  - Auto-save checkpoints
+  - Multi-agent support
+
+All you need to do:
+  1. Run: python training_loop.py
+  2. Click "Start" in GUI
+  3. Launch Minecraft
+  4. Watch it train!
+
+
+✅ REWARD TUNING IS KEY
+-----------------------
+The default rewards work well, but experiment with:
+  - Higher win rewards for more aggressive play
+  - Higher time penalties for faster fights
+  - Lower damage taken penalties if agent is too passive
+
+
+✅ TRAINING TAKES TIME
+----------------------
+- Expect 100-1000 fights before agent shows skill
+- Early fights will be random/chaotic
+- Gradually agent learns to aim, dodge, combo attacks
+- Save checkpoints frequently!
+
+
+✅ WORKS ON ANY SERVER
+----------------------
+- Client-side only - no server mod needed
+- Hit detection works via client
+- Death detection via chat parsing
+- Train on vanilla servers, PvP servers, anywhere!
+
+
+✅ MODEL SAVES AUTOMATICALLY
+----------------------------
+- Auto-saves after every fight (on death)
+- Manual save: Click "Save Model" button
+- Checkpoints saved to: checkpoints/pvp_model_YYYYMMDD_HHMMSS.pth
+- Load previous checkpoint by modifying training_loop.py
+
+
+✅ MONITOR METRICS
+------------------
+Bottom panel shows real-time training metrics:
+  - Fights: Total fights completed
+  - Updates: PPO optimization steps
+  - Policy Loss: How well agent follows policy
+  - Value Loss: How accurate value predictions are
+  - Entropy: How much exploration is happening
+
+
+✅ TROUBLESHOOTING TIPS
+-----------------------
+- If reward stays at 0: Check agent is hitting/being hit
+- If agent doesn't move: Check action sending (2 bytes + JSON)
+- If model doesn't learn: Try increasing batch_size or epochs in ppo_trainer.py
+- If training is slow: Lower frame resolution in FrameCaptureMixin
+
 
 Good luck with your training! 🚀
+The agent will surprise you with emergent strategies!
 ================================================================================

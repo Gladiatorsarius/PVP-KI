@@ -133,6 +133,9 @@ public class ExampleClientMixin {
 			if (action.has("right")) client.options.keyRight.setDown(action.get("right").getAsBoolean());
 			if (action.has("jump")) client.options.keyJump.setDown(action.get("jump").getAsBoolean());
 			if (action.has("attack")) client.options.keyAttack.setDown(action.get("attack").getAsBoolean());
+			if (action.has("swap_offhand")) client.options.keySwapOffhand.setDown(action.get("swap_offhand").getAsBoolean());
+			if (action.has("open_inventory")) client.options.keyInventory.setDown(action.get("open_inventory").getAsBoolean());
+			if (action.has("use")) client.options.keyUse.setDown(action.get("use").getAsBoolean());
 			
 			if (player != null) {
 				if (action.has("yaw")) player.setYRot(player.getYRot() + action.get("yaw").getAsFloat());

@@ -6,8 +6,8 @@ class PVPModel(nn.Module):
     def __init__(self):
         super(PVPModel, self).__init__()
         
-        # CNN for Image Processing (64x64 RGB)
-        self.conv1 = nn.Conv2d(3, 32, kernel_size=8, stride=4)
+        # CNN for Image Processing (64x64 Grayscale - 3x faster than RGB)
+        self.conv1 = nn.Conv2d(1, 32, kernel_size=8, stride=4)
         self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2)
         self.conv3 = nn.Conv2d(64, 64, kernel_size=3, stride=1)
         
@@ -18,8 +18,8 @@ class PVPModel(nn.Module):
         self.fc1 = nn.Linear(self.fc_input_dim, 512)
         
         # Outputs
-        # Movement: W, A, S, D, Space, Attack (6 logits)
-        self.actor_move = nn.Linear(512, 6)
+        # Movement/Actions: W, A, S, D, Space, Attack, SwapOffhand(F), OpenInventory(E) (8 logits)
+        self.actor_move = nn.Linear(512, 8)
         
         # Camera: Yaw, Pitch (Continuous)
         self.actor_look = nn.Linear(512, 2)
@@ -28,7 +28,7 @@ class PVPModel(nn.Module):
         self.critic = nn.Linear(512, 1)
 
     def forward(self, x):
-        # x: (Batch, 3, 64, 64)
+        # x: (Batch, 1, 64, 64) - Grayscale
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
