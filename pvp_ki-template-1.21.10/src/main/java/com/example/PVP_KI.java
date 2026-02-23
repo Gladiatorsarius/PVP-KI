@@ -56,11 +56,13 @@ public class PVP_KI implements ModInitializer {
         // Register commands (single unified tree)
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
             LOGGER.info("Registering /ki commands - Environment: " + environment);
+            // Only allow server operators (permission level 2+) to use /ki commands
             LiteralArgumentBuilder<CommandSourceStack> kiRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("ki")
-                .requires(source -> true);
+                .requires(source -> source.hasPermission(2));
 
             // /ki createkit <name>
             kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("createkit")
+                .requires(source -> source.hasPermission(2))
                 .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("name", StringArgumentType.string())
                     .executes(context -> {
                         try {
@@ -77,6 +79,7 @@ public class PVP_KI implements ModInitializer {
 
             // /ki clearkits
             kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("clearkits")
+                .requires(source -> source.hasPermission(2))
                 .executes(context -> {
                     KitManager.clearAllKits();
                     context.getSource().sendSuccess(() -> Component.literal("Cleared all server kits."), false);
@@ -85,6 +88,7 @@ public class PVP_KI implements ModInitializer {
 
             // /ki reset <p1> <p2> <kit> [shuffle]
             kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("reset")
+                .requires(source -> source.hasPermission(2))
                 .then(RequiredArgumentBuilder.<CommandSourceStack, EntitySelector>argument("p1", EntityArgument.player())
                     .then(RequiredArgumentBuilder.<CommandSourceStack, EntitySelector>argument("p2", EntityArgument.player())
                         .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("kit", StringArgumentType.string())
@@ -93,7 +97,7 @@ public class PVP_KI implements ModInitializer {
                                 .executes(context -> resetCommand(context, true)))))));
 
             // /ki settings ...
-            LiteralArgumentBuilder<CommandSourceStack> settingsRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("settings");
+            LiteralArgumentBuilder<CommandSourceStack> settingsRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("settings").requires(source -> source.hasPermission(2));
             // show
             settingsRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("show")
                 .executes(context -> {
@@ -131,7 +135,7 @@ public class PVP_KI implements ModInitializer {
 
             // /ki neutral <teamName> - mark scoreboard team as neutral
             kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("neutral")
-                .requires(source -> source.getEntity() != null)
+                .requires(source -> source.hasPermission(2) && source.getEntity() != null)
                 .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("teamName", StringArgumentType.string())
                     .executes(context -> {
                         String teamName = StringArgumentType.getString(context, "teamName");
@@ -149,6 +153,7 @@ public class PVP_KI implements ModInitializer {
 
             // /ki arena admin commands
             kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("arena")
+                .requires(source -> source.hasPermission(2))
                 .then(LiteralArgumentBuilder.<CommandSourceStack>literal("add")
                     .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("name", StringArgumentType.string())
                         .then(LiteralArgumentBuilder.<CommandSourceStack>literal("pos1")
@@ -171,6 +176,7 @@ public class PVP_KI implements ModInitializer {
 
             // /ki resetteams <numTeams> <kit> <shuffle> <teams...>
             kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("resetteams")
+                .requires(source -> source.hasPermission(2))
                 .then(RequiredArgumentBuilder.<CommandSourceStack, Integer>argument("numTeams", com.mojang.brigadier.arguments.IntegerArgumentType.integer(2))
                     .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("kit", StringArgumentType.string())
                         .then(RequiredArgumentBuilder.<CommandSourceStack, Boolean>argument("shuffle", BoolArgumentType.bool())
@@ -267,18 +273,22 @@ public class PVP_KI implements ModInitializer {
 
     private int resetteamsWorld(CommandSourceStack src, ServerLevel level, List<String> teamNames, List<List<ServerPlayer>> teamPlayers, String kitName, boolean shuffle) {
         // Find suitable base location like existing resetCommand
-        double x, z; int attempts = 0; boolean found = false;
-        do {
-            x = (Math.random() * 2000000) - 1000000;
-            z = (Math.random() * 2000000) - 1000000;
+        double x = 0, z = 0;
+        int attempts = 0;
+        boolean found = false;
+        // Restrict search area to within 100,000 blocks of spawn (performance)
+        int SEARCH_RADIUS = 100000;
+        while (attempts < 25) { // Reduce attempts for performance
+            x = (Math.random() * 2 * SEARCH_RADIUS) - SEARCH_RADIUS;
+            z = (Math.random() * 2 * SEARCH_RADIUS) - SEARCH_RADIUS;
             attempts++;
             LevelChunk chunk = level.getChunk((int)x >> 4, (int)z >> 4);
             if (chunk.getInhabitedTime() == 0 && chunk.getBlockEntities().isEmpty()) {
                 String biomeName = "plains"; // placeholder until biome API update
                 if (SettingsManager.isBiomeAllowed(biomeName)) { found = true; break; }
             }
-        } while (attempts < 100);
-        if (!found) { src.sendFailure(Component.literal("Could not find suitable location after 100 attempts")); return 0; }
+        }
+        if (!found) { src.sendFailure(Component.literal("Could not find suitable location after 25 attempts")); return 0; }
 
         // Surface Y
         double baseY = 63;
@@ -359,30 +369,25 @@ public class PVP_KI implements ModInitializer {
 
         // Find fresh location with unmodified chunks and matching biome filters
         ServerLevel level = (ServerLevel) p1.level();
-        double x, z;
+        double x = 0, z = 0;
         int attempts = 0;
         boolean foundSuitable = false;
-
-        do {
-            x = (Math.random() * 2000000) - 1000000;
-            z = (Math.random() * 2000000) - 1000000;
+        int SEARCH_RADIUS = 100000;
+        while (attempts < 25) {
+            x = (Math.random() * 2 * SEARCH_RADIUS) - SEARCH_RADIUS;
+            z = (Math.random() * 2 * SEARCH_RADIUS) - SEARCH_RADIUS;
             attempts++;
-
             LevelChunk chunk = level.getChunk((int)x >> 4, (int)z >> 4);
-
-            // Check if chunk is unmodified: inhabited time == 0 AND no block entities
             if (chunk.getInhabitedTime() == 0 && chunk.getBlockEntities().isEmpty()) {
-                // Check biome filtering - skip for now (1.21.11 API changes)
                 String biomeName = "plains"; // Default to plains biome
                 if (SettingsManager.isBiomeAllowed(biomeName)) {
                     foundSuitable = true;
                     break;
                 }
             }
-        } while (attempts < 100); // Increased attempts for biome filtering
-
+        }
         if (!foundSuitable) {
-            context.getSource().sendFailure(Component.literal("Could not find suitable location after 100 attempts"));
+            context.getSource().sendFailure(Component.literal("Could not find suitable location after 25 attempts"));
             return 0;
         }
 

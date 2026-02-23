@@ -94,31 +94,25 @@ class PPOTrainer:
         """Compute Generalized Advantage Estimation"""
         advantages = []
         gae = 0
-        
-        # Convert to numpy for easier manipulation
-        rewards = rewards.cpu().numpy()
-        values = values.cpu().numpy()
-        dones = dones.cpu().numpy()
-        
+        # Ensure all tensors are on CPU for numpy conversion
+        rewards_np = rewards.detach().cpu().numpy()
+        values_np = values.detach().cpu().numpy()
+        dones_np = dones.detach().cpu().numpy()
         # Append next_value for last step
-        values = np.append(values, next_value)
-        
+        values_np = np.append(values_np, next_value)
         # Compute GAE backwards
-        for t in reversed(range(len(rewards))):
-            if t == len(rewards) - 1:
-                next_non_terminal = 1.0 - dones[t]
-                next_value = next_value
+        for t in reversed(range(len(rewards_np))):
+            if t == len(rewards_np) - 1:
+                next_non_terminal = 1.0 - dones_np[t]
+                next_value_t = next_value
             else:
-                next_non_terminal = 1.0 - dones[t]
-                next_value = values[t + 1]
-            
-            delta = rewards[t] + self.gamma * next_value * next_non_terminal - values[t]
+                next_non_terminal = 1.0 - dones_np[t]
+                next_value_t = values_np[t + 1]
+            delta = rewards_np[t] + self.gamma * next_value_t * next_non_terminal - values_np[t]
             gae = delta + self.gamma * self.gae_lambda * next_non_terminal * gae
             advantages.insert(0, gae)
-        
         advantages = torch.tensor(advantages, dtype=torch.float32)
-        returns = advantages + torch.tensor(values[:-1], dtype=torch.float32)
-        
+        returns = advantages + torch.tensor(values_np[:-1], dtype=torch.float32)
         return advantages, returns
     
     def update(self):

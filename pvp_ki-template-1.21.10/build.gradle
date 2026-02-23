@@ -39,8 +39,11 @@ dependencies {
 	// Fabric API. This is technically optional, but you probably want it anyway.
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
 
-	// Gson for JSON parsing
+	// Gson for JSON parsing (latest stable)
 	modImplementation 'com.google.code.gson:gson:2.10.1'
+	// Add SLF4J for improved logging if not present
+	implementation 'org.slf4j:slf4j-api:2.0.13'
+	runtimeOnly 'org.slf4j:slf4j-simple:2.0.13'
 	
 }
 

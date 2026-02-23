@@ -33,7 +33,7 @@ class PVPModel(nn.Module):
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
         
-        x = x.view(x.size(0), -1)
+        x = x.contiguous().view(x.size(0), -1)
         x = F.relu(self.fc1(x))
         
         move_logits = self.actor_move(x)
