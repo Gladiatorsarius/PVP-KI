@@ -10,392 +10,476 @@ import net.minecraft.commands.arguments.selector.EntitySelector;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.InteractionResult;
-import net.minecraft.world.entity.EquipmentSlot;
-import net.minecraft.world.entity.LivingEntity;
 import net.minecraft.world.entity.player.Player;
-import net.minecraft.world.item.ItemStack;
-import net.minecraft.world.item.Items;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.File;
-import java.util.HashSet;
+import java.util.*;
 
 import com.mojang.brigadier.arguments.BoolArgumentType;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.chunk.LevelChunk;
+import net.minecraft.world.phys.BlockHitResult;
+import net.minecraft.world.phys.HitResult;
+import net.minecraft.world.phys.Vec3;
+import net.minecraft.world.scores.PlayerTeam;
+import net.minecraft.world.scores.Scoreboard;
 
 public class PVP_KI implements ModInitializer {
-	public static final String MOD_ID = "pvp_ki";
-	public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
-	public static Process pythonProcess = null;
+    public static final String MOD_ID = "pvp_ki";
+    public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
+    public static Process pythonProcess = null;
 
-	@Override
-	public void onInitialize() {
-		LOGGER.info("Initializing PVP_KI Server Mod");
-		KitManager.loadKits();
-		SettingsManager.loadSettings();
-		TeamManager.loadTeams();
+    @Override
+    public void onInitialize() {
+        LOGGER.info("Initializing PVP_KI Server Mod");
+        KitManager.loadKits();
+        SettingsManager.loadSettings();
+        ArenaManager.loadArenas();
 
-		// Shutdown Hook for Python Process
-		Runtime.getRuntime().addShutdownHook(new Thread(() -> {
-			if (pythonProcess != null && pythonProcess.isAlive()) {
-				LOGGER.info("Stopping Python process...");
-				pythonProcess.destroy();
-			}
-		}));
+        // Shutdown Hook for Python Process
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            if (pythonProcess != null && pythonProcess.isAlive()) {
+                LOGGER.info("Stopping Python process...");
+                pythonProcess.destroy();
+            }
+        }));
 
-		// Register Event Listeners
-		registerEvents();
+        // Register Event Listeners
+        registerEvents();
 
-		// Register commands (single unified tree to avoid parsing conflicts)
-		CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
-			LOGGER.info("Registering /ki commands - Environment: " + environment);
-	LiteralArgumentBuilder<CommandSourceStack> kiRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("ki")
-		.requires(source -> true); // Allow all players
+        // Register commands (single unified tree)
+        CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
+            LOGGER.info("Registering /ki commands - Environment: " + environment);
+            LiteralArgumentBuilder<CommandSourceStack> kiRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("ki")
+                .requires(source -> true);
 
-        // Note: /ki start/stop removed; reward control is now client-side /reward
+            // /ki createkit <name>
+            kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("createkit")
+                .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("name", StringArgumentType.string())
+                    .executes(context -> {
+                        try {
+                            String name = StringArgumentType.getString(context, "name");
+                            ServerPlayer player = context.getSource().getPlayerOrException();
+                            KitManager.createKit(name, player);
+                            context.getSource().sendSuccess(() -> Component.literal("Server kit '" + name + "' saved."), false);
+                            return 1;
+                        } catch (Exception e) {
+                            context.getSource().sendFailure(Component.literal("Error: " + e.getMessage()));
+                            return 0;
+                        }
+                    })));
 
-		// Server-side /ki createkit <name> - creates kits for /ki reset command
-		kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("createkit")
-			.then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("name", StringArgumentType.string())
-				.executes(context -> {
-					try {
-						String name = StringArgumentType.getString(context, "name");
-						LOGGER.info("Creating server kit: " + name);
-						ServerPlayer player = context.getSource().getPlayerOrException();
-						KitManager.createKit(name, player);
-						context.getSource().sendSuccess(() -> Component.literal("Server kit '" + name + "' saved for /ki reset."), false);
-						return 1;
-					} catch (Exception e) {
-						LOGGER.error("Error creating kit", e);
-						context.getSource().sendFailure(Component.literal("Error: " + e.getMessage()));
-						return 0;
-					}
-				})));
-	// /ki clearkits - clears all server kits
-	kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("clearkits")
-		.executes(context -> {
-			KitManager.clearAllKits();
-			context.getSource().sendSuccess(() -> Component.literal("Cleared all server kits."), false);
-			return 1;
-		}));
-		// /ki reset <p1> <p2> <kit> [shuffle]
-			kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("reset")
-				.then(RequiredArgumentBuilder.<CommandSourceStack, EntitySelector>argument("p1", EntityArgument.player())
-					.then(RequiredArgumentBuilder.<CommandSourceStack, EntitySelector>argument("p2", EntityArgument.player())
-						.then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("kit", StringArgumentType.string())
-							.executes(context -> resetCommand(context, false))
-							.then(RequiredArgumentBuilder.<CommandSourceStack, Boolean>argument("shuffle", BoolArgumentType.bool())
-								.executes(context -> resetCommand(context, true)))))));
+            // /ki clearkits
+            kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("clearkits")
+                .executes(context -> {
+                    KitManager.clearAllKits();
+                    context.getSource().sendSuccess(() -> Component.literal("Cleared all server kits."), false);
+                    return 1;
+                }));
 
-			// /ki settings commands
-			LiteralArgumentBuilder<CommandSourceStack> settingsRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("settings");
-			
-			// /ki settings show
-			settingsRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("show")
-				.executes(context -> {
-					context.getSource().sendSuccess(() -> Component.literal("=== PVP KI Settings ==="), false);
-					context.getSource().sendSuccess(() -> Component.literal("Nametags: " + (SettingsManager.showTeamNametags ? "ON" : "OFF")), false);
-					context.getSource().sendSuccess(() -> Component.literal("Allowed Biomes: " + 
-						(SettingsManager.allowedBiomes.isEmpty() ? "All" : String.join(", ", SettingsManager.allowedBiomes))), false);
-					context.getSource().sendSuccess(() -> Component.literal("Blocked Biomes: " + 
-						(SettingsManager.blockedBiomes.isEmpty() ? "None" : String.join(", ", SettingsManager.blockedBiomes))), false);
-					return 1;
-				}));
-			
-			// /ki settings nametags <on|off>
-			settingsRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("nametags")
-				.then(LiteralArgumentBuilder.<CommandSourceStack>literal("on")
-					.executes(context -> {
-						SettingsManager.showTeamNametags = true;
-						SettingsManager.saveSettings();
-						context.getSource().sendSuccess(() -> Component.literal("Team nametags enabled"), false);
-						return 1;
-					}))
-				.then(LiteralArgumentBuilder.<CommandSourceStack>literal("off")
-					.executes(context -> {
-						SettingsManager.showTeamNametags = false;
-						SettingsManager.saveSettings();
-						context.getSource().sendSuccess(() -> Component.literal("Team nametags disabled"), false);
-						return 1;
-					})));
-			
-			// /ki settings biome commands
-			LiteralArgumentBuilder<CommandSourceStack> biomeRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("biome");
-			
-			// /ki settings biome allow <biome>
-			biomeRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("allow")
-				.then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("biome", StringArgumentType.string())
-					.executes(context -> {
-						String biome = StringArgumentType.getString(context, "biome");
-						SettingsManager.allowedBiomes.add(biome);
-						SettingsManager.saveSettings();
-						context.getSource().sendSuccess(() -> Component.literal("Added '" + biome + "' to allowed biomes"), false);
-						return 1;
-					})));
-			
-			// /ki settings biome block <biome>
-			biomeRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("block")
-				.then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("biome", StringArgumentType.string())
-					.executes(context -> {
-						String biome = StringArgumentType.getString(context, "biome");
-						SettingsManager.blockedBiomes.add(biome);
-						SettingsManager.saveSettings();
-						context.getSource().sendSuccess(() -> Component.literal("Added '" + biome + "' to blocked biomes"), false);
-						return 1;
-					})));
-			
-			// /ki settings biome clear
-			biomeRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("clear")
-				.executes(context -> {
-					SettingsManager.allowedBiomes.clear();
-					SettingsManager.blockedBiomes.clear();
-					SettingsManager.saveSettings();
-					context.getSource().sendSuccess(() -> Component.literal("Cleared all biome filters"), false);
-					return 1;
-				}));
-			
-			// /ki settings biome list
-			biomeRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("list")
-				.executes(context -> {
-					context.getSource().sendSuccess(() -> Component.literal("Allowed Biomes: " + 
-						(SettingsManager.allowedBiomes.isEmpty() ? "All" : String.join(", ", SettingsManager.allowedBiomes))), false);
-					context.getSource().sendSuccess(() -> Component.literal("Blocked Biomes: " + 
-						(SettingsManager.blockedBiomes.isEmpty() ? "None" : String.join(", ", SettingsManager.blockedBiomes))), false);
-					return 1;
-				}));
-			
-			settingsRoot.then(biomeRoot);
-			kiRoot.then(settingsRoot);
+            // /ki reset <p1> <p2> <kit> [shuffle]
+            kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("reset")
+                .then(RequiredArgumentBuilder.<CommandSourceStack, EntitySelector>argument("p1", EntityArgument.player())
+                    .then(RequiredArgumentBuilder.<CommandSourceStack, EntitySelector>argument("p2", EntityArgument.player())
+                        .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("kit", StringArgumentType.string())
+                            .executes(context -> resetCommand(context, false))
+                            .then(RequiredArgumentBuilder.<CommandSourceStack, Boolean>argument("shuffle", BoolArgumentType.bool())
+                                .executes(context -> resetCommand(context, true)))))));
 
-			// Server-side /team commands
-			LiteralArgumentBuilder<CommandSourceStack> teamRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("team");
+            // /ki settings ...
+            LiteralArgumentBuilder<CommandSourceStack> settingsRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("settings");
+            // show
+            settingsRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("show")
+                .executes(context -> {
+                    context.getSource().sendSuccess(() -> Component.literal("=== PVP KI Settings ==="), false);
+                    context.getSource().sendSuccess(() -> Component.literal("Nametags: " + (SettingsManager.showTeamNametags ? "ON" : "OFF")), false);
+                    context.getSource().sendSuccess(() -> Component.literal("Reset Mode: " + SettingsManager.resetMode), false);
+                    context.getSource().sendSuccess(() -> Component.literal("Allowed Biomes: " + (SettingsManager.allowedBiomes.isEmpty() ? "All" : String.join(", ", SettingsManager.allowedBiomes))), false);
+                    context.getSource().sendSuccess(() -> Component.literal("Blocked Biomes: " + (SettingsManager.blockedBiomes.isEmpty() ? "None" : String.join(", ", SettingsManager.blockedBiomes))), false);
+                    return 1;
+                }));
+            // nametags on/off
+            settingsRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("nametags")
+                .then(LiteralArgumentBuilder.<CommandSourceStack>literal("on")
+                    .executes(context -> { SettingsManager.showTeamNametags = true; SettingsManager.saveSettings(); context.getSource().sendSuccess(() -> Component.literal("Team nametags enabled"), false); return 1; }))
+                .then(LiteralArgumentBuilder.<CommandSourceStack>literal("off")
+                    .executes(context -> { SettingsManager.showTeamNametags = false; SettingsManager.saveSettings(); context.getSource().sendSuccess(() -> Component.literal("Team nametags disabled"), false); return 1; })));
+            // biome allow/block/clear/list
+            LiteralArgumentBuilder<CommandSourceStack> biomeRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("biome");
+            biomeRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("allow")
+                .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("biome", StringArgumentType.string())
+                    .executes(context -> { String biome = StringArgumentType.getString(context, "biome"); SettingsManager.allowedBiomes.add(biome); SettingsManager.saveSettings(); context.getSource().sendSuccess(() -> Component.literal("Allowed '" + biome + "'"), false); return 1; })));
+            biomeRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("block")
+                .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("biome", StringArgumentType.string())
+                    .executes(context -> { String biome = StringArgumentType.getString(context, "biome"); SettingsManager.blockedBiomes.add(biome); SettingsManager.saveSettings(); context.getSource().sendSuccess(() -> Component.literal("Blocked '" + biome + "'"), false); return 1; })));
+            biomeRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("clear")
+                .executes(context -> { SettingsManager.allowedBiomes.clear(); SettingsManager.blockedBiomes.clear(); SettingsManager.saveSettings(); context.getSource().sendSuccess(() -> Component.literal("Cleared biome filters"), false); return 1; }));
+            biomeRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("list")
+                .executes(context -> { context.getSource().sendSuccess(() -> Component.literal("Allowed: " + (SettingsManager.allowedBiomes.isEmpty()?"All":String.join(", ", SettingsManager.allowedBiomes))), false); context.getSource().sendSuccess(() -> Component.literal("Blocked: " + (SettingsManager.blockedBiomes.isEmpty()?"None":String.join(", ", SettingsManager.blockedBiomes))), false); return 1; }));
+            settingsRoot.then(biomeRoot);
+            // resetmode
+            settingsRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("resetmode")
+                .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("mode", StringArgumentType.string())
+                    .executes(context -> { String mode = StringArgumentType.getString(context, "mode"); if (!mode.equalsIgnoreCase("world") && !mode.equalsIgnoreCase("arena")) { context.getSource().sendFailure(Component.literal("Invalid mode. Use 'world' or 'arena'.")); return 0; } SettingsManager.resetMode = mode.toLowerCase(Locale.ROOT); SettingsManager.saveSettings(); context.getSource().sendSuccess(() -> Component.literal("Reset mode set to " + SettingsManager.resetMode), false); return 1; })));            
+            kiRoot.then(settingsRoot);
 
-			// /team create <name>
-			teamRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("create")
-				.then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("name", StringArgumentType.string())
-					.executes(context -> {
-						String teamName = StringArgumentType.getString(context, "name");
-						TeamManager.createTeam(teamName);
-						broadcastTeamUpdate(context.getSource());
-						context.getSource().sendSuccess(() -> Component.literal("Created team '" + teamName + "'"), true);
-						return 1;
-					})));
+            // /ki neutral <teamName> - mark scoreboard team as neutral
+            kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("neutral")
+                .requires(source -> source.getEntity() != null)
+                .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("teamName", StringArgumentType.string())
+                    .executes(context -> {
+                        String teamName = StringArgumentType.getString(context, "teamName");
+                        if (SettingsManager.neutralTeams.contains(teamName)) {
+                            SettingsManager.neutralTeams.remove(teamName);
+                            SettingsManager.saveSettings();
+                            context.getSource().sendSuccess(() -> Component.literal("Removed '" + teamName + "' from neutral teams"), false);
+                        } else {
+                            SettingsManager.neutralTeams.add(teamName);
+                            SettingsManager.saveSettings();
+                            context.getSource().sendSuccess(() -> Component.literal("Added '" + teamName + "' to neutral teams"), false);
+                        }
+                        return 1;
+                    })));
 
-		// /team delete <name> - REMOVED (use /team remove instead)
+            // /ki arena admin commands
+            kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("arena")
+                .then(LiteralArgumentBuilder.<CommandSourceStack>literal("add")
+                    .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("name", StringArgumentType.string())
+                        .then(LiteralArgumentBuilder.<CommandSourceStack>literal("pos1")
+                            .executes(ctx -> { ServerPlayer p = ctx.getSource().getPlayerOrException(); BlockPos hit = rayTraceBlock(p, 64); if (hit == null) { ctx.getSource().sendFailure(Component.literal("No block targeted")); return 0; } ArenaManager.setPos(StringArgumentType.getString(ctx, "name"), hit, false); ctx.getSource().sendSuccess(() -> Component.literal("Set pos1 for '" + StringArgumentType.getString(ctx, "name") + "' to " + hit.toShortString()), true); return 1; }))
+                        .then(LiteralArgumentBuilder.<CommandSourceStack>literal("pos2")
+                            .executes(ctx -> { ServerPlayer p = ctx.getSource().getPlayerOrException(); BlockPos hit = rayTraceBlock(p, 64); if (hit == null) { ctx.getSource().sendFailure(Component.literal("No block targeted")); return 0; } ArenaManager.setPos(StringArgumentType.getString(ctx, "name"), hit, true); ctx.getSource().sendSuccess(() -> Component.literal("Set pos2 for '" + StringArgumentType.getString(ctx, "name") + "' to " + hit.toShortString()), true); return 1; }))
+                    ))
+                .then(LiteralArgumentBuilder.<CommandSourceStack>literal("enable")
+                    .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("name", StringArgumentType.string())
+                        .executes(ctx -> { ArenaManager.enable(StringArgumentType.getString(ctx, "name"), true); ctx.getSource().sendSuccess(() -> Component.literal("Enabled arena"), true); return 1; })))
+                .then(LiteralArgumentBuilder.<CommandSourceStack>literal("disable")
+                    .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("name", StringArgumentType.string())
+                        .executes(ctx -> { ArenaManager.enable(StringArgumentType.getString(ctx, "name"), false); ctx.getSource().sendSuccess(() -> Component.literal("Disabled arena"), true); return 1; })))
+                .then(LiteralArgumentBuilder.<CommandSourceStack>literal("remove")
+                    .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("name", StringArgumentType.string())
+                        .executes(ctx -> { boolean ok = ArenaManager.remove(StringArgumentType.getString(ctx, "name")); if (ok) ctx.getSource().sendSuccess(() -> Component.literal("Removed arena"), true); else ctx.getSource().sendFailure(Component.literal("Arena not found")); return ok?1:0; })))
+                .then(LiteralArgumentBuilder.<CommandSourceStack>literal("list")
+                    .executes(ctx -> { var enabled = ArenaManager.getEnabled(); if (enabled.isEmpty()) { ctx.getSource().sendSuccess(() -> Component.literal("No enabled arenas"), false); } else { ctx.getSource().sendSuccess(() -> Component.literal("Enabled arenas:"), false); for (ArenaManager.ArenaConfig a : enabled) { ctx.getSource().sendSuccess(() -> Component.literal("- " + a.name + " [" + (a.pos1!=null?a.pos1.toShortString():"?") + ", " + (a.pos2!=null?a.pos2.toShortString():"?") + "]"), false); } } return 1; }))
+            );
 
-		// /team add [team name] [player name]
-			teamRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("add")
-				.then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("team", StringArgumentType.string())
-					.then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("player", StringArgumentType.string())
-						.executes(context -> {
-							String teamName = StringArgumentType.getString(context, "team");
-							String playerName = StringArgumentType.getString(context, "player");
-							TeamManager.addPlayerToTeam(teamName, playerName);
-							broadcastTeamUpdate(context.getSource());
-							context.getSource().sendSuccess(() -> Component.literal("Added " + playerName + " to team '" + teamName + "'"), true);
-							return 1;
-						}))));
+            // /ki resetteams <numTeams> <kit> <shuffle> <teams...>
+            kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("resetteams")
+                .then(RequiredArgumentBuilder.<CommandSourceStack, Integer>argument("numTeams", com.mojang.brigadier.arguments.IntegerArgumentType.integer(2))
+                    .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("kit", StringArgumentType.string())
+                        .then(RequiredArgumentBuilder.<CommandSourceStack, Boolean>argument("shuffle", BoolArgumentType.bool())
+                            .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("teams", StringArgumentType.greedyString())
+                                .executes(ctx -> resetteams(ctx))))))
+            );
 
-		// /team remove team [team name] - removes entire team
-		// /team remove player [player name] - removes player from all teams
-		teamRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("remove")
-			.then(LiteralArgumentBuilder.<CommandSourceStack>literal("team")
-				.then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("teamName", StringArgumentType.string())
-					.executes(context -> {
-						String teamName = StringArgumentType.getString(context, "teamName");
-						boolean removed = TeamManager.deleteTeam(teamName);
-						if (removed) {
-						broadcastTeamUpdate(context.getSource());
-							context.getSource().sendSuccess(() -> Component.literal("Removed team '" + teamName + "'"), true);
-							return 1;
-						} else {
-							context.getSource().sendFailure(Component.literal("Team '" + teamName + "' not found"));
-							return 0;
-						}
-					})))
-			.then(LiteralArgumentBuilder.<CommandSourceStack>literal("player")
-				.then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("playerName", StringArgumentType.string())
-					.executes(context -> {
-						String playerName = StringArgumentType.getString(context, "playerName");
-						boolean removed = TeamManager.removePlayerByName(playerName);
-						if (removed) {
-						broadcastTeamUpdate(context.getSource());
-							context.getSource().sendSuccess(() -> Component.literal("Removed player '" + playerName + "' from all teams"), true);
-							return 1;
-						} else {
-							context.getSource().sendFailure(Component.literal("Player '" + playerName + "' not found in any team"));
-							return 0;
-						}
-					}))));
+            dispatcher.register(kiRoot);
+        });
+    }
 
-		// /team list
-			teamRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("list")
-				.executes(context -> {
-					var allTeams = TeamManager.getAllTeams();
-					if (allTeams.isEmpty()) {
-						context.getSource().sendSuccess(() -> Component.literal("No teams exist"), false);
-					} else {
-						context.getSource().sendSuccess(() -> Component.literal("=== Teams ==="), false);
-						for (String teamName : allTeams.keySet()) {
-							String members = String.join(", ", allTeams.get(teamName));
-							context.getSource().sendSuccess(() -> Component.literal(teamName + ": " + members), false);
-						}
-					}
-					return 1;
-				}));
+    // Server-side raytrace to get targeted block
+    private BlockPos rayTraceBlock(ServerPlayer player, int maxDistance) {
+        Vec3 start = player.getEyePosition(1.0f);
+        Vec3 look = player.getLookAngle();
+        Vec3 end = start.add(look.x * maxDistance, look.y * maxDistance, look.z * maxDistance);
+        ClipContext ctx = new ClipContext(start, end, ClipContext.Block.COLLIDER, ClipContext.Fluid.NONE, player);
+        BlockHitResult result = player.level().clip(ctx);
+        if (result.getType() == HitResult.Type.BLOCK) {
+            return result.getBlockPos();
+        }
+        return null;
+    }
 
-			// /team clear
-			teamRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("clear")
-				.executes(context -> {
-					for (String teamName : new HashSet<>(TeamManager.getTeamNames())) {
-						TeamManager.deleteTeam(teamName);
-					}
-					broadcastTeamUpdate(context.getSource());
-					context.getSource().sendSuccess(() -> Component.literal("All teams cleared"), true);
-					return 1;
-				}));
+    // /ki resetteams handler
+    private int resetteams(com.mojang.brigadier.context.CommandContext<CommandSourceStack> ctx) {
+        try {
+            int numTeams = com.mojang.brigadier.arguments.IntegerArgumentType.getInteger(ctx, "numTeams");
+            String kitName = StringArgumentType.getString(ctx, "kit");
+            boolean shuffle = BoolArgumentType.getBool(ctx, "shuffle");
+            String teamsStr = StringArgumentType.getString(ctx, "teams");
+            List<String> teamNames = new ArrayList<>();
+            for (String t : teamsStr.split("\\s+")) if (!t.isBlank()) teamNames.add(t);
 
-			dispatcher.register(kiRoot);
-			
-			// Remove vanilla /team command and register our custom one
-			dispatcher.getRoot().getChildren().removeIf(node -> node.getName().equals("team"));
-			dispatcher.register(teamRoot);
-		});
-	}
+            // Validate team count against mode
+            boolean arenaMode = "arena".equalsIgnoreCase(SettingsManager.resetMode);
+            if (arenaMode && (numTeams < 2 || numTeams > 4)) {
+                ctx.getSource().sendFailure(Component.literal("Arena mode supports 2-4 teams"));
+                return 0;
+            }
+            if (!arenaMode && (numTeams < 2 || numTeams > 10)) {
+                ctx.getSource().sendFailure(Component.literal("World mode supports 2-10 teams"));
+                return 0;
+            }
+            if (teamNames.size() != numTeams) {
+                ctx.getSource().sendFailure(Component.literal("Expected " + numTeams + " team names, got " + teamNames.size()));
+                return 0;
+            }
 
-	private int resetCommand(com.mojang.brigadier.context.CommandContext<CommandSourceStack> context, boolean hasShuffle) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
-		ServerPlayer p1 = EntityArgument.getPlayer(context, "p1");
-		ServerPlayer p2 = EntityArgument.getPlayer(context, "p2");
-		String kitName = StringArgumentType.getString(context, "kit");
-		boolean shuffle = hasShuffle && BoolArgumentType.getBool(context, "shuffle");
+            // Resolve kit
+            if ("random".equalsIgnoreCase(kitName)) {
+                String rnd = KitManager.getRandomKit();
+                if (rnd == null) { ctx.getSource().sendFailure(Component.literal("No kits available for 'random'")); return 0; }
+                kitName = rnd;
+            }
 
-		if ("random".equalsIgnoreCase(kitName)) {
-			kitName = KitManager.getRandomKit();
-		}
+            // Validate teams exist and all members online
+            Scoreboard sb = ctx.getSource().getServer().getScoreboard();
+            List<List<ServerPlayer>> teamPlayers = new ArrayList<>();
+            for (String name : teamNames) {
+                PlayerTeam team = sb.getPlayerTeam(name);
+                if (team == null) {
+                    ctx.getSource().sendFailure(Component.literal("Team '" + name + "' not found in scoreboard"));
+                    return 0;
+                }
+                List<ServerPlayer> online = new ArrayList<>();
+                for (String pn : team.getPlayers()) {
+                    ServerPlayer sp = ctx.getSource().getServer().getPlayerList().getPlayerByName(pn);
+                    if (sp == null) {
+                        ctx.getSource().sendFailure(Component.literal("Player '" + pn + "' (Team '" + name + "') is offline — aborting reset"));
+                        return 0;
+                    }
+                    online.add(sp);
+                }
+                if (online.isEmpty()) {
+                    ctx.getSource().sendFailure(Component.literal("Team '" + name + "' has no online players"));
+                    return 0;
+                }
+                teamPlayers.add(online);
+            }
 
-		// Find fresh location with unmodified chunks and matching biome filters
-		ServerLevel level = (ServerLevel) p1.level();
-		double x, z;
-		int attempts = 0;
-		boolean foundSuitable = false;
-		
-		do {
-			x = (Math.random() * 2000000) - 1000000;
-			z = (Math.random() * 2000000) - 1000000;
-			attempts++;
-			
-			LevelChunk chunk = level.getChunk((int)x >> 4, (int)z >> 4);
-			
-		// Check if chunk is unmodified: inhabited time == 0 AND no block entities
-		if (chunk.getInhabitedTime() == 0 && chunk.getBlockEntities().isEmpty()) {
-			// Check biome filtering - skip for now (1.21.11 API changes)
-			String biomeName = "plains"; // Default to plains biome
-			if (SettingsManager.isBiomeAllowed(biomeName)) {
-				foundSuitable = true;
-				break;
-			}
-		}
-	} while (attempts < 100); // Increased attempts for biome filtering
-	
-	if (!foundSuitable) {
-		context.getSource().sendFailure(Component.literal("Could not find suitable location after 100 attempts"));
-		return 0;
-	}
+            // Dispatch by mode
+            ServerLevel level = ctx.getSource().getLevel();
+            if (!arenaMode) {
+                return resetteamsWorld(ctx.getSource(), level, teamNames, teamPlayers, kitName, shuffle);
+            } else {
+                return resetteamsArena(ctx.getSource(), level, teamNames, teamPlayers, kitName, shuffle);
+            }
+        } catch (Exception e) {
+            ctx.getSource().sendFailure(Component.literal("Error: " + e.getMessage()));
+            return 0;
+        }
+    }
 
-		// Find safe surface Y (first solid block from top)
-		double y = 63; // Default to world height
-		for (int checkY = 320; checkY >= 0; checkY--) {
-			net.minecraft.world.level.block.state.BlockState state = level.getBlockState(new BlockPos((int)x, checkY, (int)z));
-			if (!state.isAir()) {
-				y = checkY + 1.8; // 1.8 blocks above solid ground (player eye height)
-				break;
-			}
-		}
+    private int resetteamsWorld(CommandSourceStack src, ServerLevel level, List<String> teamNames, List<List<ServerPlayer>> teamPlayers, String kitName, boolean shuffle) {
+        // Find suitable base location like existing resetCommand
+        double x, z; int attempts = 0; boolean found = false;
+        do {
+            x = (Math.random() * 2000000) - 1000000;
+            z = (Math.random() * 2000000) - 1000000;
+            attempts++;
+            LevelChunk chunk = level.getChunk((int)x >> 4, (int)z >> 4);
+            if (chunk.getInhabitedTime() == 0 && chunk.getBlockEntities().isEmpty()) {
+                String biomeName = "plains"; // placeholder until biome API update
+                if (SettingsManager.isBiomeAllowed(biomeName)) { found = true; break; }
+            }
+        } while (attempts < 100);
+        if (!found) { src.sendFailure(Component.literal("Could not find suitable location after 100 attempts")); return 0; }
 
-		// Find safe surface Y for p2 at offset position
-		double y2 = 63;
-		for (int checkY = 320; checkY >= 0; checkY--) {
-			net.minecraft.world.level.block.state.BlockState state = level.getBlockState(new BlockPos((int)x + 10, checkY, (int)z));
-			if (!state.isAir()) {
-				y2 = checkY + 1.8;
-				break;
-			}
-		}
+        // Surface Y
+        double baseY = 63;
+        for (int checkY = 320; checkY >= 0; checkY--) {
+            if (!level.getBlockState(new BlockPos((int)x, checkY, (int)z)).isAir()) { baseY = checkY + 1.0; break; }
+        }
 
-		resetPlayer(p1, x, y, z, kitName, shuffle);
-		resetPlayer(p2, x + 10, y2, z, kitName, shuffle);
+        int n = teamNames.size();
+        double radius = 20.0;
+        for (int i = 0; i < n; i++) {
+            double angle = (2 * Math.PI * i) / n;
+            double tx = x + radius * Math.cos(angle);
+            double tz = z + radius * Math.sin(angle);
+            // small per-player offset within team
+            for (ServerPlayer sp : teamPlayers.get(i)) {
+                double ox = (Math.random() - 0.5) * 4.0; // ±2
+                double oz = (Math.random() - 0.5) * 4.0; // ±2
+                teleportAndApply(sp, tx + ox, baseY, tz + oz, kitName, shuffle);
+            }
+        }
 
-		// Send RESET event to Python
-		ServerIPCClient.sendCommand("RESET", p1.getName().getString() + "," + p2.getName().getString());
+        ServerIPCClient.sendCommand("RESET", String.join(",", teamNames));
+        src.sendSuccess(() -> Component.literal("Resetted " + n + " teams in world mode with kit '" + kitName + "'"), true);
+        return 1;
+    }
 
-		String finalKit = kitName;
-		double finalX = x;
-		double finalZ = z;
-		context.getSource().sendSuccess(() -> Component.literal("Reset to " + (int)finalX + ", " + (int)finalZ + " with kit " + finalKit), true);
-		return 1;
-	}
+    private int resetteamsArena(CommandSourceStack src, ServerLevel level, List<String> teamNames, List<List<ServerPlayer>> teamPlayers, String kitName, boolean shuffle) {
+        List<ArenaManager.ArenaConfig> enabled = ArenaManager.getEnabled();
+        if (enabled.isEmpty()) { src.sendFailure(Component.literal("No enabled arenas")); return 0; }
+        ArenaManager.ArenaConfig arena = enabled.get(new java.util.Random().nextInt(enabled.size()));
+        BlockPos min = arena.getMin(); BlockPos max = arena.getMax();
+        if (min == null || max == null) { src.sendFailure(Component.literal("Arena '" + arena.name + "' is incomplete")); return 0; }
+        int height = arena.getHeight();
+        int destY = min.getY() + height + 10;
+        BlockPos destMin = new BlockPos(min.getX(), destY, min.getZ());
 
-	private void resetPlayer(ServerPlayer player, double x, double y, double z, String kit, boolean shuffle) {
-		player.setHealth(player.getMaxHealth());
-		player.getFoodData().setFoodLevel(20);
-		player.getInventory().clearContent();
-		player.removeAllEffects();
-		player.teleportTo(x, y, z);
-		player.setYRot(0);
-		player.setXRot(0);
+        // Execute /clone with replace
+        String cmd = String.format(Locale.ROOT,
+            "/clone %d %d %d %d %d %d %d %d %d replace",
+            min.getX(), min.getY(), min.getZ(), max.getX(), max.getY(), max.getZ(), destMin.getX(), destMin.getY(), destMin.getZ());
+        src.getServer().getCommands().performPrefixedCommand(src, cmd);
 
-		if (kit != null) {
-			KitManager.applyKit(kit, player, shuffle);
-		}
-	}
+        // Find pads in source then map to destination by Y offset
+        List<BlockPos> pads = ArenaManager.findWhiteWoolPads(level, arena);
+        if (pads.size() < teamNames.size()) {
+            src.sendFailure(Component.literal("Arena '" + arena.name + "' has only " + pads.size() + " pads; " + teamNames.size() + " teams requested"));
+            return 0;
+        }
+        // Randomly pick distinct pads from sorted list
+        List<BlockPos> shuffled = new ArrayList<>(pads);
+        Collections.shuffle(shuffled);
+        List<BlockPos> chosen = shuffled.subList(0, teamNames.size());
 
-	private void broadcastTeamUpdate(CommandSourceStack source) {
-		// Broadcast team data to all connected clients via chat messages
-		LOGGER.info("Team data updated and will be synced to clients");
-		
-		// Send team data as special chat messages that clients can parse
-		var allTeams = TeamManager.getAllTeams();
-		var server = source.getServer();
-		
-		for (String teamName : allTeams.keySet()) {
-			String members = String.join(",", allTeams.get(teamName));
-			String teamData = "TEAMDATA:" + teamName + ":" + members;
-			Component message = Component.literal(teamData);
-			
-			// Send to all online players
-			for (ServerPlayer player : server.getPlayerList().getPlayers()) {
-				player.sendSystemMessage(message);
-			}
-		}
-	}
+        int yOffset = destMin.getY() - min.getY();
+        for (int i = 0; i < teamNames.size(); i++) {
+            BlockPos srcPad = chosen.get(i);
+            BlockPos dstPad = new BlockPos(srcPad.getX(), srcPad.getY() + yOffset, srcPad.getZ());
+            double ty = dstPad.getY() + 1.0; // feet on top of block
+            for (ServerPlayer sp : teamPlayers.get(i)) {
+                teleportAndApply(sp, dstPad.getX() + 0.5, ty, dstPad.getZ() + 0.5, kitName, shuffle);
+            }
+        }
 
-	private void registerEvents() {
-		// Attack Event - hits are tracked client-side via IPC only
-		AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
-			if (player instanceof ServerPlayer && entity instanceof Player) {
-				String attacker = player.getName().getString();
-				String target = entity.getName().getString();
-				// Only log server-side for debugging, client will send via IPC
-				LOGGER.info("EVENT:HIT:" + attacker + ":" + target);
-				// No displayClientMessage - hits are sent via IPC to Python for reward tracking
-			}
-			return InteractionResult.PASS;
-		});
+        ServerIPCClient.sendCommand("RESET", String.join(",", teamNames));
+        src.sendSuccess(() -> Component.literal("Resetted " + teamNames.size() + " teams in arena '" + arena.name + "' with kit '" + kitName + "'"), true);
+        return 1;
+    }
 
-		// Death Event - server-side only for logging
-		ServerLivingEntityEvents.AFTER_DEATH.register((entity, source) -> {
-			if (entity instanceof ServerPlayer) {
-				String victim = entity.getName().getString();
-				String killer = source.getEntity() != null ? source.getEntity().getName().getString() : "Environment";
-				LOGGER.info("EVENT:DEATH:" + victim + ":" + killer);
-				// No hotbar message - death tracking handled client-side via health monitoring
-			}
-		});
-	}
+    private int resetCommand(com.mojang.brigadier.context.CommandContext<CommandSourceStack> context, boolean hasShuffle) throws com.mojang.brigadier.exceptions.CommandSyntaxException {
+        ServerPlayer p1 = EntityArgument.getPlayer(context, "p1");
+        ServerPlayer p2 = EntityArgument.getPlayer(context, "p2");
+        String kitName = StringArgumentType.getString(context, "kit");
+        boolean shuffle = hasShuffle && BoolArgumentType.getBool(context, "shuffle");
+
+        if ("random".equalsIgnoreCase(kitName)) {
+            kitName = KitManager.getRandomKit();
+        }
+
+        // Find fresh location with unmodified chunks and matching biome filters
+        ServerLevel level = (ServerLevel) p1.level();
+        double x, z;
+        int attempts = 0;
+        boolean foundSuitable = false;
+
+        do {
+            x = (Math.random() * 2000000) - 1000000;
+            z = (Math.random() * 2000000) - 1000000;
+            attempts++;
+
+            LevelChunk chunk = level.getChunk((int)x >> 4, (int)z >> 4);
+
+            // Check if chunk is unmodified: inhabited time == 0 AND no block entities
+            if (chunk.getInhabitedTime() == 0 && chunk.getBlockEntities().isEmpty()) {
+                // Check biome filtering - skip for now (1.21.11 API changes)
+                String biomeName = "plains"; // Default to plains biome
+                if (SettingsManager.isBiomeAllowed(biomeName)) {
+                    foundSuitable = true;
+                    break;
+                }
+            }
+        } while (attempts < 100); // Increased attempts for biome filtering
+
+        if (!foundSuitable) {
+            context.getSource().sendFailure(Component.literal("Could not find suitable location after 100 attempts"));
+            return 0;
+        }
+
+        // Find safe surface Y (first solid block from top)
+        double y = 63; // Default to world height
+        for (int checkY = 320; checkY >= 0; checkY--) {
+            net.minecraft.world.level.block.state.BlockState state = level.getBlockState(new BlockPos((int)x, checkY, (int)z));
+            if (!state.isAir()) {
+                y = checkY + 1.8; // 1.8 blocks above solid ground (player eye height)
+                break;
+            }
+        }
+
+        // Find safe surface Y for p2 at offset position
+        double y2 = 63;
+        for (int checkY = 320; checkY >= 0; checkY--) {
+            net.minecraft.world.level.block.state.BlockState state = level.getBlockState(new BlockPos((int)x + 10, checkY, (int)z));
+            if (!state.isAir()) {
+                y2 = checkY + 1.8;
+                break;
+            }
+        }
+
+        resetPlayer(p1, x, y, z, kitName, shuffle);
+        resetPlayer(p2, x + 10, y2, z, kitName, shuffle);
+
+        // Send RESET event to Python
+        ServerIPCClient.sendCommand("RESET", p1.getName().getString() + "," + p2.getName().getString());
+
+        String finalKit = kitName;
+        double finalX = x;
+        double finalZ = z;
+        context.getSource().sendSuccess(() -> Component.literal("Reset to " + (int)finalX + ", " + (int)finalZ + " with kit " + finalKit), true);
+        return 1;
+    }
+
+    private void resetPlayer(ServerPlayer player, double x, double y, double z, String kit, boolean shuffle) {
+        player.setHealth(player.getMaxHealth());
+        player.getFoodData().setFoodLevel(20);
+        player.getInventory().clearContent();
+        player.removeAllEffects();
+        player.teleportTo(x, y, z);
+        player.setYRot(0);
+        player.setXRot(0);
+
+        if (kit != null) {
+            KitManager.applyKit(kit, player, shuffle);
+        }
+    }
+
+    private void teleportAndApply(ServerPlayer player, double x, double y, double z, String kit, boolean shuffle) {
+        resetPlayer(player, x, y, z, kit, shuffle);
+    }
+
+    private void registerEvents() {
+        // Attack Event - compute relation and send to IPC with damage info
+        AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
+            if (player instanceof ServerPlayer attacker && entity instanceof ServerPlayer target) {
+                String attackerName = attacker.getName().getString();
+                String targetName = target.getName().getString();
+                
+                // Compute relation
+                String relation = computeRelation(attacker, target);
+                
+                // Log for Python IPC to pick up (damage will be computed from health delta)
+                LOGGER.info("EVENT:HIT:" + attackerName + ":" + targetName + ":" + relation);
+            }
+            return InteractionResult.PASS;
+        });
+
+        // Death Event - server-side only for logging
+        ServerLivingEntityEvents.AFTER_DEATH.register((entity, source) -> {
+            if (entity instanceof ServerPlayer) {
+                String victim = entity.getName().getString();
+                String killer = source.getEntity() != null ? source.getEntity().getName().getString() : "Environment";
+                LOGGER.info("EVENT:DEATH:" + victim + ":" + killer);
+            }
+        });
+    }
+
+    private String computeRelation(ServerPlayer attacker, ServerPlayer target) {
+        ServerLevel level = (ServerLevel) attacker.level();
+        Scoreboard scoreboard = level.getScoreboard();
+        PlayerTeam attackerTeam = scoreboard.getPlayersTeam(attacker.getScoreboardName());
+        PlayerTeam targetTeam = scoreboard.getPlayersTeam(target.getScoreboardName());
+        
+        if (attackerTeam != null && targetTeam != null && attackerTeam == targetTeam) {
+            return "team";
+        }
+        
+        if (attackerTeam != null && SettingsManager.neutralTeams.contains(attackerTeam.getName())) {
+            return "neutral";
+        }
+        if (targetTeam != null && SettingsManager.neutralTeams.contains(targetTeam.getName())) {
+            return "neutral";
+        }
+        
+        return "enemy";
+    }
 }

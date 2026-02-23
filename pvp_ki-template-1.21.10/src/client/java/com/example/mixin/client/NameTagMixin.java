@@ -1,9 +1,8 @@
 package com.example.mixin.client;
 
+import com.example.ClientTeamManager;
 import com.example.PVP_KIClient;
-import com.example.SettingsManager;
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.player.LocalPlayer;
 import net.minecraft.network.chat.Component;
 import net.minecraft.network.chat.MutableComponent;
 import net.minecraft.network.chat.Style;
@@ -17,6 +16,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 
 /**
  * Mixin to modify player nametags based on team membership
+ * Shows bold labels: [Team] green, [Enemy] red, [Neutral] gray
  */
 @Mixin(Entity.class)
 public class NameTagMixin {
@@ -29,38 +29,43 @@ public class NameTagMixin {
             return;
         }
         
-        // Check if nametags are enabled
-        if (!SettingsManager.showTeamNametags) {
+        // Check if nametags are enabled (session toggle)
+        if (!PVP_KIClient.nametagsEnabled) {
             return;
         }
         
         Player player = (Player) entity;
-        String playerName = player.getName().getString();
+        String targetName = player.getName().getString();
         
-        // Check if this player is in our team
-        boolean isTeamMember = false;
-        synchronized (PVP_KIClient.teamMembers) {
-            isTeamMember = PVP_KIClient.teamMembers.contains(playerName);
-        }
-        
-        // Don't modify our own nametag
+        // Get local player
         Minecraft mc = Minecraft.getInstance();
-        if (mc.player != null && playerName.equals(mc.player.getName().getString())) {
+        if (mc.player == null) {
             return;
         }
         
-        // Create modified nametag
-        MutableComponent newName;
-        if (isTeamMember) {
-            // Green "Team" label for teammates
-            newName = Component.literal("[Team]")
+        String localName = mc.player.getName().getString();
+        
+        // Don't modify our own nametag
+        if (targetName.equals(localName)) {
+            return;
+        }
+        
+        // Get relation using unified logic
+        String relation = ClientTeamManager.getRelation(localName, targetName);
+        
+        // Create label-only nametag based on relation
+        MutableComponent label;
+        if ("team".equals(relation)) {
+            label = Component.literal("[Team]")
                     .setStyle(Style.EMPTY.withColor(ChatFormatting.GREEN).withBold(true));
+        } else if ("neutral".equals(relation)) {
+            label = Component.literal("[Neutral]")
+                    .setStyle(Style.EMPTY.withColor(ChatFormatting.GRAY).withBold(true));
         } else {
-            // Red "Enemy" label for enemies
-            newName = Component.literal("[Enemy]")
+            label = Component.literal("[Enemy]")
                     .setStyle(Style.EMPTY.withColor(ChatFormatting.RED).withBold(true));
         }
         
-        cir.setReturnValue(newName);
+        cir.setReturnValue(label);
     }
 }

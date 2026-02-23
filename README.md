@@ -29,10 +29,15 @@ Complete implementation of the multi-agent reinforcement learning system for Min
 - 100 sampling attempts for suitable locations
 
 #### **Phase 5: Nametag Overlay System**
-- Visual team/enemy identification
+- Visual team/enemy/neutral identification
 - `[Team]` (green) for teammates
 - `[Enemy]` (red) for opponents
-- Hides actual player names
+- `[Neutral]` (gray) for neutrals
+- Labels-only display (no player names)
+- `/nametags` - Toggle overlay (default ON, session-only)
+- `/clientteam team add/remove` - Client fallback teams (when not OP)
+- `/clientteam neutral add/remove` - Client neutral list
+- `/ki neutral <teamName>` - Server-side neutral team marking (OP-only)
 
 #### **Phase 6: PPO Training Infrastructure**
 - Shared Actor-Critic model across all agents
@@ -40,6 +45,10 @@ Complete implementation of the multi-agent reinforcement learning system for Min
 - GAE (λ=0.95) + PPO clipping (ε=0.2)
 - Autosave every 10 fights to `checkpoints/`
 - Real-time metrics display (policy loss, value loss, entropy)
+- Per-damage relation-based rewards:
+  - Enemy Hit/♥: reward per 0.5 heart dealt to enemies
+  - Neutral Hit/♥: penalty per 0.5 heart dealt to neutrals
+  - Team Hit/♥: penalty per 0.5 heart dealt to teammates
 
 ## 🚀 Quick Start
 
@@ -73,8 +82,16 @@ cd pvp_ki-template-1.21.10
 /agent 1
 /agent 2
 
-# Create teams (client-side)
-/team add PlayerName
+# Create teams (server-side if OP)
+/team add @s
+/ki neutral NeutralTeam
+
+# Client-side fallback (if not OP or no server teams)
+/clientteam team add PlayerName
+/clientteam neutral add NeutralPlayer
+
+# Toggle nametag labels
+/nametags
 
 # Configure environment (server-side, requires mod)
 /ki settings biome allow plains

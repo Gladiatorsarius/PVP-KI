@@ -22,6 +22,10 @@ public class SettingsManager {
     public static boolean showTeamNametags = true;
     public static Set<String> allowedBiomes = new HashSet<>();
     public static Set<String> blockedBiomes = new HashSet<>();
+    // Reset mode: "world" or "arena"
+    public static String resetMode = "world";
+    // Neutral teams: scoreboard teams marked as neutral
+    public static Set<String> neutralTeams = new HashSet<>();
     
     // Teams (temporary, per session)
     public static Map<String, Set<String>> teams = new HashMap<>();
@@ -41,6 +45,11 @@ public class SettingsManager {
                 
                 allowedBiomes = new HashSet<>((List<String>) data.getOrDefault("allowedBiomes", new ArrayList<>()));
                 blockedBiomes = new HashSet<>((List<String>) data.getOrDefault("blockedBiomes", new ArrayList<>()));
+                Object rm = data.get("resetMode");
+                if (rm instanceof String) {
+                    resetMode = (String) rm;
+                }
+                neutralTeams = new HashSet<>((List<String>) data.getOrDefault("neutralTeams", new ArrayList<>()));
                 
                 System.out.println("[Settings] Loaded settings");
             }
@@ -57,6 +66,8 @@ public class SettingsManager {
             data.put("showTeamNametags", showTeamNametags);
             data.put("allowedBiomes", new ArrayList<>(allowedBiomes));
             data.put("blockedBiomes", new ArrayList<>(blockedBiomes));
+            data.put("resetMode", resetMode);
+            data.put("neutralTeams", new ArrayList<>(neutralTeams));
             
             try (Writer writer = Files.newBufferedWriter(SETTINGS_FILE)) {
                 GSON.toJson(data, writer);

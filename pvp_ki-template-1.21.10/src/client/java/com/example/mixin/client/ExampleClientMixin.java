@@ -25,15 +25,29 @@ public class ExampleClientMixin {
 	private static final int TARGET_WIDTH = 64;
 	private static final int TARGET_HEIGHT = 64;
 
+	// Inject at HEAD to capture BEFORE GUI overlays (ESC menu, inventory, etc.)
+	// This ensures AI sees the actual game world, not menus
+	@Inject(at = @At("HEAD"), method = "render")
+	private void onRenderStart(net.minecraft.client.DeltaTracker deltaTracker, boolean bl, CallbackInfo ci) {
+		// Capture frame if IPC active OR if test frame requested
+		boolean isTestFrame = PVP_KIClient.testFrameRequested;
+		if ((PVP_KIClient.ipcManager != null && PVP_KIClient.ipcManager.isActive()) || isTestFrame) {
+			captureFrame(isTestFrame);
+			if (isTestFrame) {
+				PVP_KIClient.testFrameRequested = false; // Reset flag after capture
+			}
+		}
+	}
+
+	// Apply actions at TAIL (after rendering) to avoid input conflicts
 	@Inject(at = @At("TAIL"), method = "render")
-	private void onRender(net.minecraft.client.DeltaTracker deltaTracker, boolean bl, CallbackInfo ci) {
+	private void onRenderEnd(net.minecraft.client.DeltaTracker deltaTracker, boolean bl, CallbackInfo ci) {
 		if (PVP_KIClient.ipcManager != null && PVP_KIClient.ipcManager.isActive()) {
-			captureFrame();
 			applyActions();
 		}
 	}
 
-	private void captureFrame() {
+	private void captureFrame(boolean isTestFrame) {
 		Minecraft client = Minecraft.getInstance();
 		int windowWidth = client.getWindow().getWidth();
 		int windowHeight = client.getWindow().getHeight();
@@ -113,6 +127,7 @@ public class ExampleClientMixin {
 					state.put("yaw", player.getYRot());
 					state.put("width", TARGET_WIDTH);
 					state.put("height", TARGET_HEIGHT);
+					state.put("test_frame", isTestFrame); // Mark test frames
 				}
 				PVP_KIClient.ipcManager.sendFrame(frameBytes, state);
 			}

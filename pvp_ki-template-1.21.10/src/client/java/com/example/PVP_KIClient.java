@@ -16,6 +16,7 @@ import net.minecraft.world.entity.player.Player;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 
 import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
@@ -26,6 +27,8 @@ public class PVP_KIClient implements ClientModInitializer {
 	public static final List<String> eventQueue = Collections.synchronizedList(new ArrayList<>());
 	public static final List<String> teamMembers = Collections.synchronizedList(new ArrayList<>());
 	public static int currentAgentId = 1; // Current agent this client is mapped to
+	public static boolean testFrameRequested = false; // Flag for /testframe command
+	public static boolean nametagsEnabled = true; // Session-only toggle, default ON
 
 	@Override
 	public void onInitializeClient() {
@@ -70,19 +73,30 @@ public class PVP_KIClient implements ClientModInitializer {
 					return 1;
 				}));
 
-		// Debug command /testframe to check IPC status and frame sending
+		// Client-side /nametags toggle (default ON, session-only)
+		dispatcher.register(ClientCommandManager.literal("nametags")
+				.executes(context -> {
+					nametagsEnabled = !nametagsEnabled;
+					context.getSource().sendFeedback(Component.literal(
+						"Nametag labels: " + (nametagsEnabled ? "ON" : "OFF") + " (session only)"
+					));
+					return 1;
+				}));
+
+		// Debug command /testframe to send ONE frame to Python for testing
 		dispatcher.register(ClientCommandManager.literal("testframe")
 				.executes(context -> {
 					if (ipcManager != null && ipcManager.isActive()) {
 						Minecraft mc = Minecraft.getInstance();
 						if (mc.player != null) {
-							context.getSource().sendFeedback(Component.literal("IPC Active - Python connected on port " + (9999 + currentAgentId - 1)));
-							context.getSource().sendFeedback(Component.literal("Frames are being sent automatically"));
+							testFrameRequested = true;
+							context.getSource().sendFeedback(Component.literal("§a[TestFrame] Capturing and sending ONE frame to Python..."));
+							context.getSource().sendFeedback(Component.literal("§7Check Python console and look for 'test_frame.png'"));
 						} else {
-							context.getSource().sendFeedback(Component.literal("No player - cannot send frames"));
+							context.getSource().sendFeedback(Component.literal("§cNo player - cannot send frames"));
 						}
 					} else {
-						context.getSource().sendFeedback(Component.literal("IPC not active - Python not connected"));
+						context.getSource().sendFeedback(Component.literal("§cIPC not active - Python not connected"));
 					}
 					return 1;
 				}));
@@ -216,55 +230,80 @@ public class PVP_KIClient implements ClientModInitializer {
 						
 						context.getSource().sendFeedback(Component.literal("Switched to Agent " + id + " (Port " + port + ")"));
 					return 1;
-				})));			// Client-side /clientteam commands (only when NO server teams exist)
-			if (!ClientTeamManager.hasServerTeams()) {
-				dispatcher.register(ClientCommandManager.literal("clientteam")
+				})));			// Client-side /clientteam commands (always available, shows message if server teams active)
+			dispatcher.register(ClientCommandManager.literal("clientteam")
+				.then(ClientCommandManager.literal("team")
 					.then(ClientCommandManager.literal("add")
 						.then(ClientCommandManager.argument("player", StringArgumentType.string())
 							.executes(context -> {
-								String playerName = StringArgumentType.getString(context, "player");
-								if (!teamMembers.contains(playerName)) {
-									teamMembers.add(playerName);
-									context.getSource().sendFeedback(Component.literal("Added " + playerName + " to local team"));
-								} else {
-									context.getSource().sendFeedback(Component.literal(playerName + " is already in local team"));
+								if (ClientTeamManager.hasServerTeams()) {
+									context.getSource().sendFeedback(Component.literal("Server teams are active. Use /team instead."));
+									return 1;
 								}
+								String playerName = StringArgumentType.getString(context, "player");
+								ClientTeamManager.addToClientTeam(playerName);
+								context.getSource().sendFeedback(Component.literal("Added " + playerName + " to local team"));
 								return 1;
 							})))
 					.then(ClientCommandManager.literal("remove")
 						.then(ClientCommandManager.argument("player", StringArgumentType.string())
 							.executes(context -> {
-								String playerName = StringArgumentType.getString(context, "player");
-								if (teamMembers.remove(playerName)) {
-									context.getSource().sendFeedback(Component.literal("Removed " + playerName + " from local team"));
-								} else {
-									context.getSource().sendFeedback(Component.literal(playerName + " is not in local team"));
+								if (ClientTeamManager.hasServerTeams()) {
+									context.getSource().sendFeedback(Component.literal("Server teams are active. Use /team instead."));
+									return 1;
 								}
+								String playerName = StringArgumentType.getString(context, "player");
+								ClientTeamManager.removeFromClientTeam(playerName);
+								context.getSource().sendFeedback(Component.literal("Removed " + playerName + " from local team"));
+								return 1;
+							}))))
+				.then(ClientCommandManager.literal("neutral")
+					.then(ClientCommandManager.literal("add")
+						.then(ClientCommandManager.argument("player", StringArgumentType.string())
+							.executes(context -> {
+								if (ClientTeamManager.hasServerTeams()) {
+									context.getSource().sendFeedback(Component.literal("Server teams are active. Use /ki neutral instead."));
+									return 1;
+								}
+								String playerName = StringArgumentType.getString(context, "player");
+								ClientTeamManager.addToClientNeutral(playerName);
+								context.getSource().sendFeedback(Component.literal("Added " + playerName + " to local neutral list"));
 								return 1;
 							})))
-					.then(ClientCommandManager.literal("list")
-						.executes(context -> {
-							if (teamMembers.isEmpty()) {
-								context.getSource().sendFeedback(Component.literal("Local team is empty"));
-							} else {
-								context.getSource().sendFeedback(Component.literal("Local team members: " + String.join(", ", teamMembers)));
-							}
-							return 1;
-						}))
-					.then(ClientCommandManager.literal("clear")
-						.executes(context -> {
-							teamMembers.clear();
-							context.getSource().sendFeedback(Component.literal("Local team cleared"));
-							return 1;
-						})));
-			} else {
-				// Server teams exist - don't register clientteam, show message instead
-				dispatcher.register(ClientCommandManager.literal("clientteam")
+					.then(ClientCommandManager.literal("remove")
+						.then(ClientCommandManager.argument("player", StringArgumentType.string())
+							.executes(context -> {
+								if (ClientTeamManager.hasServerTeams()) {
+									context.getSource().sendFeedback(Component.literal("Server teams are active. Use /ki neutral instead."));
+									return 1;
+								}
+								String playerName = StringArgumentType.getString(context, "player");
+								ClientTeamManager.removeFromClientNeutral(playerName);
+								context.getSource().sendFeedback(Component.literal("Removed " + playerName + " from local neutral list"));
+								return 1;
+							}))))
+				.then(ClientCommandManager.literal("list")
 					.executes(context -> {
-						context.getSource().sendFeedback(Component.literal("Server teams are active. Use /team instead."));
+						if (ClientTeamManager.hasServerTeams()) {
+							context.getSource().sendFeedback(Component.literal("Server teams are active."));
+							return 1;
+						}
+						Set<String> team = ClientTeamManager.getClientTeamMembers();
+						Set<String> neutral = ClientTeamManager.getClientNeutralMembers();
+						context.getSource().sendFeedback(Component.literal("Local team: " + (team.isEmpty() ? "empty" : String.join(", ", team))));
+						context.getSource().sendFeedback(Component.literal("Local neutral: " + (neutral.isEmpty() ? "empty" : String.join(", ", neutral))));
 						return 1;
-					}));
-			}
+					}))
+				.then(ClientCommandManager.literal("clear")
+					.executes(context -> {
+						if (ClientTeamManager.hasServerTeams()) {
+							context.getSource().sendFeedback(Component.literal("Server teams are active."));
+							return 1;
+						}
+						ClientTeamManager.clearClientTeams();
+						context.getSource().sendFeedback(Component.literal("Local teams cleared"));
+						return 1;
+					})));
 		});
 
 		// Register Chat Listener for Events, Team Data, and Death Messages

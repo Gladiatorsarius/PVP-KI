@@ -9,17 +9,19 @@ import tkinter as tk
 from tkinter import ttk
 from model import PVPModel
 from ppo_trainer import PPOTrainer, ExperienceBuffer
+from PIL import Image
 
 class AgentController:
     def __init__(self, parent, name, port, shared_model=None, ppo_trainer=None):
         self.name = name
         self.port = port
+        self.agent_id = port  # Use port as unique agent ID
         self.running = False
         self.stop_event = threading.Event()
         self.thread = None
         self.shared_model = shared_model
         self.ppo_trainer = ppo_trainer
-        self.ipcManager = None  # Reference to IPC manager for test inputs
+        self.client_socket = None  # Socket connection to Minecraft mod (set during loop)
 
         # UI Frame with scroll
         self.frame = ttk.LabelFrame(parent, text=f"{name} (Port {port})")
@@ -59,6 +61,12 @@ class AgentController:
         self.time_penalty = self.create_input(config_frame, "Time:", "-0.1")
         self.team_hit_penalty = self.create_input(config_frame, "Team Hit:", "-50.0")
         self.team_kill_penalty = self.create_input(config_frame, "Team Kill:", "-500.0")
+        
+        # Per-damage relation-based rewards (per 0.5 heart)
+        ttk.Label(config_frame, text="--- Per Half-Heart Damage ---", font=("Arial", 8, "bold")).pack(anchor="w", padx=5, pady=(5,0))
+        self.reward_enemy_hit = self.create_input(config_frame, "Enemy Hit/♥:", "5.0")
+        self.reward_neutral_hit = self.create_input(config_frame, "Neutral Hit/♥:", "-10.0")
+        self.reward_team_hit = self.create_input(config_frame, "Team Hit/♥:", "-25.0")
 
         # Controls
         btn_frame = ttk.Frame(content_frame)
@@ -172,9 +180,9 @@ class AgentController:
                           command=lambda idx=j: self.send_test_input(idx)).pack(side="left", padx=2)
 
     def send_test_input(self, input_idx):
-        """Send a single test input to the mod"""
-        if not self.ipcManager:
-            self.log("IPC not connected")
+        """Send a single test input to the mod via the active socket"""
+        if not self.client_socket:
+            self.log("No active connection to Minecraft mod")
             return
         
         # Map input index to action
@@ -189,16 +197,16 @@ class AgentController:
         if input_idx in action:
             try:
                 self.log(f"Test button clicked: {self.input_names[input_idx]}")
-                rb = json.dumps(action[input_idx]).encode('utf-8')
-                if self.ipcManager and getattr(self.ipcManager, 'currentOut', None):
-                    self.ipcManager.currentOut.write(struct.pack('>H', len(rb)))
-                    self.ipcManager.currentOut.write(rb)
-                    self.ipcManager.currentOut.flush()
-                    self.log(f"Sent test input {self.input_names[input_idx]}")
-                else:
-                    self.log("IPC not connected for test input")
+                action_json = json.dumps(action[input_idx])
+                action_bytes = action_json.encode('utf-8')
+                
+                # Send with 2-byte length prefix (unsigned short, big-endian)
+                self.client_socket.send(struct.pack('>H', len(action_bytes)))
+                self.client_socket.send(action_bytes)
+                self.log(f"Sent test input {self.input_names[input_idx]}")
             except Exception as e:
                 self.log(f"Error sending test input: {e}")
+                self.client_socket = None  # Mark socket as dead
 
     def create_input(self, parent, label, default):
         f = ttk.Frame(parent)
@@ -268,6 +276,7 @@ class AgentController:
                 client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 client.connect(('127.0.0.1', self.port))
                 self.log("Connected!")
+                self.client_socket = client  # Store socket for test input sending
                 break
             except ConnectionRefusedError:
                 if self.stop_event.is_set(): return
@@ -308,6 +317,12 @@ class AgentController:
                 img_data = self.recv_exact(client, blen)
                 if not img_data: break
 
+                # Check if this is a test frame and save it
+                if header.get('test_frame', False):
+                    self.save_test_frame(img_data, header)
+                    self.log("Test frame saved as 'test_frame.png'")
+                    continue  # Don't process test frames through model
+
                 # Rewards
                 reward = self.time_penalty.get()
                 curr_health = header.get('health', 20.0)
@@ -321,7 +336,21 @@ class AgentController:
                     if len(parts) >= 3:
                         etype = parts[1]
                         if etype == 'HIT':
-                            reward += self.damage_dealt.get()
+                            # HIT format: EVENT:HIT:attacker:victim:relation
+                            # Apply per-damage reward based on relation
+                            if len(parts) >= 5:
+                                relation = parts[4]  # team, enemy, or neutral
+                                # Compute damage from health delta
+                                damage_half_hearts = max(0, last_health - curr_health)
+                                if relation == 'enemy':
+                                    reward += damage_half_hearts * self.reward_enemy_hit.get()
+                                elif relation == 'neutral':
+                                    reward += damage_half_hearts * self.reward_neutral_hit.get()
+                                elif relation == 'team':
+                                    reward += damage_half_hearts * self.reward_team_hit.get()
+                            else:
+                                # Fallback for old format without relation
+                                reward += self.damage_dealt.get()
                         elif etype == 'DEATH':
                             if curr_health <= 0:
                                 reward += self.loss_penalty.get()
@@ -432,12 +461,29 @@ class AgentController:
             self.log(f"Error: {e}")
         finally:
             if client: client.close()
+            self.client_socket = None  # Clear socket reference
             self.running = False
             # Use frame.after() to update GUI from thread safely
             self.frame.after(0, lambda: self.start_btn.config(state="normal"))
             self.frame.after(0, lambda: self.stop_btn.config(state="disabled"))
             self.frame.after(0, lambda: self.status_var.set("Status: Stopped"))
             self.log("Disconnected")
+
+    def save_test_frame(self, img_data, header):
+        """Save a test frame as PNG for visual verification"""
+        try:
+            w, h = header['width'], header['height']
+            # Frame is in BGR format from OpenGL
+            img_bgr = np.frombuffer(img_data, dtype=np.uint8).reshape((h, w, 4))  # BGRA
+            # Convert BGRA to RGB (drop alpha, swap B and R)
+            img_rgb = img_bgr[:, :, [2, 1, 0]]  # BGR -> RGB
+            # Flip vertically (OpenGL origin is bottom-left)
+            img_rgb = np.flipud(img_rgb)
+            # Save as PNG
+            img = Image.fromarray(img_rgb, mode='RGB')
+            img.save(f'test_frame_agent_{self.agent_id}.png')
+        except Exception as e:
+            self.log(f"Error saving test frame: {e}")
 
     def handle_server_command(self, header):
         """Handle commands from server (START, STOP, RESET) in header"""
@@ -626,6 +672,9 @@ class AgentManager:
                 agent.time_penalty.set(source_agent.time_penalty.get())
                 agent.team_hit_penalty.set(source_agent.team_hit_penalty.get())
                 agent.team_kill_penalty.set(source_agent.team_kill_penalty.get())
+                agent.reward_enemy_hit.set(source_agent.reward_enemy_hit.get())
+                agent.reward_neutral_hit.set(source_agent.reward_neutral_hit.get())
+                agent.reward_team_hit.set(source_agent.reward_team_hit.get())
                 agent.log("Reward config updated from " + source_agent.name)
     
     def apply_actions_to_all(self, source_agent):
@@ -644,7 +693,6 @@ class AgentManager:
         name = f"Agent {agent_num}"
         agent = AgentController(self.agent_frame, name, port, self.shared_model, self.ppo_trainer)
         agent.manager = self  # Set reference to manager
-        agent.ipcManager = self.ipc_manager  # Share IPC manager for test inputs
         self.agents.append(agent)
         print(f"Added {name} on port {port}")
     

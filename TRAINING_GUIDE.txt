@@ -193,6 +193,12 @@ E) Reward Calculation:
    - Configured via GUI sliders (see Step 2 above)
    - Applied automatically based on events from Minecraft
    - Example: Hit enemy → +10.0, Got hit → -10.0, Win → +500.0
+   - Per-Damage Relation-Based Rewards (NEW):
+     * Enemy Hit/♥: reward per 0.5 heart dealt to enemies (default: +5.0)
+     * Neutral Hit/♥: penalty per 0.5 heart dealt to neutrals (default: -10.0)
+     * Team Hit/♥: penalty per 0.5 heart dealt to teammates (default: -25.0)
+   - Encourages precise targeting and discourages friendly fire
+   - Fine-tune per half-heart to train agents on damage optimization
 
 THE SYSTEM IS FULLY AUTOMATED!
 -------------------------------
