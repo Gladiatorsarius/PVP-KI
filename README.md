@@ -36,17 +36,22 @@ The Java mod communicates with the Python backend via IPC, allowing real-time co
 4. Configure mod settings as needed in `src/main/resources/`
 
 ### Python (AI Agent)
-1. Install Python 3.8+ and pip
-2. Install dependencies:
+1. Install Python 3.10+ and pip
+2. Create and activate a virtual environment:
    ```bash
    cd python
+   python -m venv venv
+   source venv/bin/activate  # On Windows use: venv\Scripts\activate
+   ```
+3. Install dependencies inside the virtual environment:
+   ```bash
    pip install -r requirements.txt
    ```
-3. Run the main agent:
+4. Run the main agent:
    ```bash
    python main.py
    ```
-4. For training, refer to `doc/TRAINING_GUIDE.txt` and use scripts in `python/backend/`
+5. For training, refer to `doc/TRAINING_GUIDE.txt` and use scripts in `python/backend/`
 
 ## Usage
 - Launch Minecraft with the mod installed
