@@ -7,12 +7,6 @@ class ClickableLabel(QLabel):
     def mouseReleaseEvent(self, event):
         self.clicked.emit()
         super().mouseReleaseEvent(event)
-
-try:
-    from ..backend.backend_adaptor import DummyBackendAdapter
-except Exception:
-    from backend.backend_adaptor import DummyBackendAdapter
-
 class AgentControllerQt(QWidget):
     def __init__(self, name, port, shared_model=None, ppo_trainer=None, backend_adapter=None, parent=None):
         super().__init__(parent)
@@ -23,7 +17,7 @@ class AgentControllerQt(QWidget):
         self.setMinimumWidth(350)
         self.setMaximumWidth(400)
         self.setContentsMargins(5, 5, 5, 5)
-        self.backend = backend_adapter or DummyBackendAdapter(name, port)
+        self.backend = backend_adapter
 
 
         main_layout = QVBoxLayout()
@@ -31,9 +25,9 @@ class AgentControllerQt(QWidget):
 
         # Title (clickable)
         self.title_label = ClickableLabel(f"v {self.name} (Port {self.port})")
-        self.title_label.setStyleSheet("font-weight: bold; font-size: 16px; cursor: pointer;")
+        self.title_label.setStyleSheet("font-weight: bold; font-size: 16px;")
         self.title_label.setToolTip("Click to hide this agent UI")
-        self.title_label.clicked.connect(self.toggle_visibility)
+        self.title_label.clicked.connect(self._on_title_clicked)
         main_layout.addWidget(self.title_label)
 
         # Agent layout (contains everything except the title)
@@ -99,8 +93,10 @@ class AgentControllerQt(QWidget):
 
         # Control buttons
         btn_layout = QHBoxLayout()
-        self.start_btn = QPushButton("Start")
-        self.stop_btn = QPushButton("Stop")
+        # Left button cycles: Connect -> Start -> Stop
+        self.start_btn = QPushButton("Connect")
+        # Right button is Disconnect (disabled until connected)
+        self.stop_btn = QPushButton("Disconnect")
         self.stop_btn.setEnabled(False)
         btn_layout.addWidget(self.start_btn)
         btn_layout.addWidget(self.stop_btn)
@@ -111,54 +107,147 @@ class AgentControllerQt(QWidget):
         self.agent_widget.setLayout(agent_layout)
         main_layout.addWidget(self.agent_widget)
 
+        # internal UI state
+        self._connected = False
+        self._running = False
+        self._pending_disconnect = False
+
         # Connect start/stop to backend adapter
         self.start_btn.clicked.connect(self._on_start_clicked)
         self.stop_btn.clicked.connect(self._on_stop_clicked)
 
-        # Wire backend signals to the UI
+        # Wire backend signals to the UI (if present)
         try:
             self.backend.log.connect(self.log)
             self.backend.reward.connect(self._on_reward)
             self.backend.started.connect(self._on_started)
             self.backend.stopped.connect(self._on_stopped)
+            # new signals: connected/disconnected (may not exist on older adapters)
+            try:
+                self.backend.connected.connect(self._on_connected)
+                self.backend.disconnected.connect(self._on_disconnected)
+            except Exception:
+                # backend may not have connected/disconnected signals
+                pass
         except Exception:
             # backend may be a plain object without signals
             pass
 
     def _on_start_clicked(self):
         try:
-            self.backend.start()
+            # If not connected yet, perform connect
+            if not self._connected:
+                try:
+                    self.backend.connect()
+                    self.start_btn.setEnabled(False)
+                    self.log("Connecting...")
+                except Exception as e:
+                    self.log(f"Error initiating connect: {e}")
+                return
+
+            # If connected but not running -> start
+            if not self._running:
+                try:
+                    self.backend.start()
+                except Exception as e:
+                    self.log(f"Error starting backend: {e}")
+                return
+
+            # If already running -> act as stop
+            try:
+                self.backend.stop()
+            except Exception as e:
+                self.log(f"Error stopping backend: {e}")
         except Exception as e:
-            self.log(f"Error starting backend: {e}")
+            self.log(f"Unexpected error in start button handler: {e}")
 
     def _on_stop_clicked(self):
         try:
-            self.backend.stop()
+            # This button is 'Disconnect'. If running, request stop first and then disconnect.
+            if self._running:
+                self._pending_disconnect = True
+                self.log("Stopping before disconnect...")
+                # disable disconnect to avoid double clicks
+                self.stop_btn.setEnabled(False)
+                try:
+                    self.backend.stop()
+                except Exception as e:
+                    self.log(f"Error stopping backend before disconnect: {e}")
+                return
+
+            # If not running but connected, disconnect immediately
+            if self._connected:
+                try:
+                    self.backend.disconnect()
+                except Exception as e:
+                    self.log(f"Error disconnecting backend: {e}")
         except Exception as e:
-            self.log(f"Error stopping backend: {e}")
+            self.log(f"Unexpected error in disconnect handler: {e}")
 
 
-    def toggle_visibility(self):
+    def _on_title_clicked(self):
         self.agent_widget.setVisible(not self.agent_widget.isVisible())
         self.title_label.setText(f" {'>' if not self.agent_widget.isVisible() else 'v'} {self.name} (Port {self.port})")
                 
-    
-
     def _on_started(self):
+        self._running = True
         self.status_label.setText("Status: Running")
-        self.start_btn.setEnabled(False)
+        # Left button becomes 'Stop'
+        self.start_btn.setText("Stop")
+        self.start_btn.setEnabled(True)
+        # Disconnect remains available
         self.stop_btn.setEnabled(True)
 
     def _on_stopped(self):
+        self._running = False
+        # If we were pending a disconnect, perform it now
+        if self._pending_disconnect:
+            self._pending_disconnect = False
+            try:
+                self.backend.disconnect()
+            except Exception as e:
+                self.log(f"Error disconnecting after stop: {e}")
+            return
+
+        # Otherwise remain connected but stopped
         self.status_label.setText("Status: Stopped")
-        self.start_btn.setEnabled(True)
-        self.stop_btn.setEnabled(False)
+        # Left button shows 'Start' when connected
+        if self._connected:
+            self.start_btn.setText("Start")
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(True)
+        else:
+            self.start_btn.setText("Connect")
+            self.start_btn.setEnabled(True)
+            self.stop_btn.setEnabled(False)
 
     def _on_reward(self, value):
         try:
             self.reward_label.setText(f"Reward: {value}")
         except Exception:
             pass
+
+    def _on_connected(self):
+        # backend reported a successful connection
+        self._connected = True
+        self.status_label.setText("Status: Connected")
+        self.start_btn.setText("Start")
+        self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(True)
+
+    def _on_disconnected(self):
+        # backend reported disconnected
+        self._connected = False
+        self._running = False
+        self._pending_disconnect = False
+        self.status_label.setText("Status: Stopped")
+        self.start_btn.setText("Connect")
+        self.start_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+
+    def _set_visible(self, visible):
+        self.agent_widget.setVisible(visible)
+        self.title_label.setText(f" {'>' if not visible else 'v'} {self.name} (Port {self.port})")
 
     def log(self, msg):
         self.log_text.append(msg)

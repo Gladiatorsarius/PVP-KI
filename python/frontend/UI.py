@@ -17,16 +17,24 @@ class MainWindow(QMainWindow):
         main_layout = QVBoxLayout()
         main_widget.setLayout(main_layout)
 
-        # Add/Remove agent buttons
+        # Add agent control buttons
         btn_layout = QHBoxLayout()
         self.add_btn = QPushButton("+ Add Agent")
         self.remove_btn = QPushButton("- Remove Last")
         self.hide_btn = QPushButton("Hide All")
-        btn_layout.addWidget(self.hide_btn)
+        self.show_btn = QPushButton("Show All")
         btn_layout.addWidget(self.add_btn)
         btn_layout.addWidget(self.remove_btn)
+        btn_layout.addWidget(self.hide_btn)
+        btn_layout.addWidget(self.show_btn)
         main_layout.addLayout(btn_layout)
-
+        
+        # Connect buttons
+        self.add_btn.clicked.connect(self.add_agent)
+        self.remove_btn.clicked.connect(self.remove_agent)
+        self.hide_btn.clicked.connect(self.hide_all_agents)
+        self.show_btn.clicked.connect(self.show_all_agents)
+        
         # Scroll area for agents
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -50,10 +58,6 @@ class MainWindow(QMainWindow):
                 from manager import Manager as _Manager
             self.manager = _Manager()
 
-        # Connect buttons
-        self.add_btn.clicked.connect(self.add_agent)
-        self.remove_btn.clicked.connect(self.remove_agent)
-        self.hide_btn.clicked.connect(self.toggle_agents_visibility)
         # Add two agents by default
         self.add_agent()
         self.add_agent()
@@ -72,4 +76,10 @@ class MainWindow(QMainWindow):
             agent = self.agent_controllers.pop()
             agent.setParent(None)
 
-    def toggle_agents_visibility(self):
+    def hide_all_agents(self):
+        for agent in self.agent_controllers:
+            agent._set_visible(False)
+    
+    def show_all_agents(self):
+        for agent in self.agent_controllers:
+            agent._set_visible(True)

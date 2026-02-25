@@ -95,22 +95,25 @@ public class SettingsManager {
     }
     
     // Team management
-    public static void createTeam(String teamName, List<String> players) {
+    public static void createTeam(String teamName, List<String> players, ServerLevel server) {
         teams.put(teamName, new HashSet<>(players));
         System.out.println("[Teams] Created team '" + teamName + "' with " + players.size() + " players");
+        PVP_KI.broadcastTeams(server);
     }
     
-    public static void addToTeam(String teamName, String player) {
+    public static void addToTeam(String teamName, String player, ServerLevel server) {
         teams.computeIfAbsent(teamName, k -> new HashSet<>()).add(player);
+        PVP_KI.broadcastTeams(server);
     }
     
-    public static void removeFromTeam(String teamName, String player) {
+    public static void removeFromTeam(String teamName, String player, ServerLevel server) {
         Set<String> team = teams.get(teamName);
         if (team != null) {
             team.remove(player);
             if (team.isEmpty()) {
                 teams.remove(teamName);
             }
+            PVP_KI.broadcastTeams(server);
         }
     }
     
@@ -129,9 +132,10 @@ public class SettingsManager {
         return team1 != null && team1.equals(team2);
     }
     
-    public static void clearTeams() {
+    public static void clearTeams(ServerLevel server) {
         teams.clear();
         System.out.println("[Teams] Cleared all teams");
+        PVP_KI.broadcastTeams(server);
     }
     
     // Biome filtering

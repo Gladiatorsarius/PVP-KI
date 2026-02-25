@@ -4,6 +4,8 @@ import random
 class DummyBackendAdapter(QObject):
     started = pyqtSignal()
     stopped = pyqtSignal()
+    connected = pyqtSignal()
+    disconnected = pyqtSignal()
     log = pyqtSignal(str)
     reward = pyqtSignal(float)
 
@@ -12,12 +14,16 @@ class DummyBackendAdapter(QObject):
         self.name = name
         self.port = port
         self._running = False
+        self._connected = False
         self._timer = QTimer()
         self._timer.setInterval(1000)
         self._timer.timeout.connect(self._emit_metrics)
 
     def start(self):
         if self._running:
+            return
+        if not self._connected:
+            self.log.emit(f"{self.name}: cannot start, not connected")
             return
         self._running = True
         self.log.emit(f"{self.name}: started (dummy)")
@@ -31,6 +37,24 @@ class DummyBackendAdapter(QObject):
         self._running = False
         self.log.emit(f"{self.name}: stopped (dummy)")
         self.stopped.emit()
+
+    def connect(self):
+        # simulate a connect operation
+        if self._connected:
+            return
+        self._connected = True
+        self.log.emit(f"{self.name}: connected (dummy)")
+        self.connected.emit()
+
+    def disconnect(self):
+        # stop if running, then disconnect
+        if self._running:
+            self.stop()
+        if not self._connected:
+            return
+        self._connected = False
+        self.log.emit(f"{self.name}: disconnected (dummy)")
+        self.disconnected.emit()
 
     def _emit_metrics(self):
         # Emit a random reward and a small log message
@@ -46,12 +70,15 @@ class SimpleBackendAdapter(QObject):
     """
     started = pyqtSignal()
     stopped = pyqtSignal()
+    connected = pyqtSignal()
+    disconnected = pyqtSignal()
     log = pyqtSignal(str)
     reward = pyqtSignal(float)
 
     def __init__(self, agent_controller, parent=None):
         super().__init__(parent)
         self._ctrl = agent_controller
+        self._connected = False
 
     def start(self):
         try:
@@ -68,6 +95,28 @@ class SimpleBackendAdapter(QObject):
             self.stopped.emit()
         except Exception as e:
             self.log.emit(f"Error stopping {self._ctrl.name}: {e}")
+
+    def connect(self):
+        try:
+            # Delegate to underlying controller if it exposes connect, otherwise assume connected
+            if hasattr(self._ctrl, 'connect'):
+                self._ctrl.connect()
+            self._connected = True
+            self.log.emit(f"{self._ctrl.name}: connected")
+            self.connected.emit()
+        except Exception as e:
+            self.log.emit(f"Error connecting {getattr(self._ctrl, 'name', '')}: {e}")
+
+    def disconnect(self):
+        try:
+            # If controller exposes disconnect, call it
+            if hasattr(self._ctrl, 'disconnect'):
+                self._ctrl.disconnect()
+            self._connected = False
+            self.log.emit(f"{getattr(self._ctrl, 'name', '')}: disconnected")
+            self.disconnected.emit()
+        except Exception as e:
+            self.log.emit(f"Error disconnecting {getattr(self._ctrl, 'name', '')}: {e}")
 
     def send_action(self, action):
         try:

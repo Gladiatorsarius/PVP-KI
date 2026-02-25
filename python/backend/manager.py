@@ -1,5 +1,5 @@
 from .backend_adaptor import DummyBackendAdapter, SimpleBackendAdapter
-from . import training_loop
+
 
 class Manager:
     def __init__(self):
@@ -14,6 +14,8 @@ class Manager:
         if dummy:
             adapter = DummyBackendAdapter(name, port)
         else:
+            # Import training_loop lazily to avoid heavy deps at module import time
+            from . import training_loop
             ctrl = training_loop.AgentController(name, port, shared_model=shared_model, ppo_trainer=ppo_trainer)
             adapter = SimpleBackendAdapter(ctrl)
         self.agents[port] = adapter

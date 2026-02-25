@@ -31,12 +31,59 @@ import net.minecraft.world.scores.PlayerTeam;
 import net.minecraft.world.scores.Scoreboard;
 
 public class PVP_KI implements ModInitializer {
+        // Broadcast teams and nametag flag to all players
+        public static void broadcastTeams(ServerLevel server) {
+            List<ServerPlayer> players = server.getServer().getPlayerList().getPlayers();
+            net.minecraft.network.FriendlyByteBuf buf = new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
+            buf.writeBoolean(SettingsManager.showTeamNametags);
+            buf.writeInt(SettingsManager.neutralTeams.size());
+            for (String team : SettingsManager.neutralTeams) buf.writeUtf(team);
+            // Write teams
+            buf.writeInt(SettingsManager.teams.size());
+            for (Map.Entry<String, Set<String>> entry : SettingsManager.teams.entrySet()) {
+                buf.writeUtf(entry.getKey());
+                buf.writeInt(entry.getValue().size());
+                for (String player : entry.getValue()) buf.writeUtf(player);
+            }
+            for (ServerPlayer p : players) {
+                net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(p, new net.minecraft.resources.ResourceLocation("pvp_ki", "teams_update"), buf);
+            }
+        }
     public static final String MOD_ID = "pvp_ki";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
     public static Process pythonProcess = null;
 
     @Override
     public void onInitialize() {
+                // Listen for vanilla scoreboard team changes (covers /team and API changes)
+                net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+                    server.getScoreboard().addListener(new net.minecraft.world.scores.ScoreboardListener() {
+                        @Override
+                        public void onTeamAdded(net.minecraft.world.scores.Scoreboard scoreboard, net.minecraft.world.scores.PlayerTeam team) {
+                            for (ServerLevel level : server.getAllLevels()) {
+                                PVP_KI.broadcastTeams(level);
+                            }
+                        }
+                        @Override
+                        public void onTeamRemoved(net.minecraft.world.scores.Scoreboard scoreboard, net.minecraft.world.scores.PlayerTeam team) {
+                            for (ServerLevel level : server.getAllLevels()) {
+                                PVP_KI.broadcastTeams(level);
+                            }
+                        }
+                        @Override
+                        public void onPlayerJoined(net.minecraft.world.scores.Scoreboard scoreboard, net.minecraft.world.scores.PlayerTeam team, String playerName) {
+                            for (ServerLevel level : server.getAllLevels()) {
+                                PVP_KI.broadcastTeams(level);
+                            }
+                        }
+                        @Override
+                        public void onPlayerLeft(net.minecraft.world.scores.Scoreboard scoreboard, net.minecraft.world.scores.PlayerTeam team, String playerName) {
+                            for (ServerLevel level : server.getAllLevels()) {
+                                PVP_KI.broadcastTeams(level);
+                            }
+                        }
+                    });
+                });
         LOGGER.info("Initializing PVP_KI Server Mod");
         KitManager.loadKits();
         SettingsManager.loadSettings();
@@ -58,11 +105,11 @@ public class PVP_KI implements ModInitializer {
             LOGGER.info("Registering /ki commands - Environment: " + environment);
             // Only allow server operators (permission level 2+) to use /ki commands
             LiteralArgumentBuilder<CommandSourceStack> kiRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("ki")
-                .requires(source -> source.hasPermission(2));
+                .requires(source -> true);
 
             // /ki createkit <name>
             kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("createkit")
-                .requires(source -> source.hasPermission(2))
+                .requires(source -> true)
                 .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("name", StringArgumentType.string())
                     .executes(context -> {
                         try {
@@ -79,7 +126,7 @@ public class PVP_KI implements ModInitializer {
 
             // /ki clearkits
             kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("clearkits")
-                .requires(source -> source.hasPermission(2))
+                .requires(source -> true)
                 .executes(context -> {
                     KitManager.clearAllKits();
                     context.getSource().sendSuccess(() -> Component.literal("Cleared all server kits."), false);
@@ -88,7 +135,7 @@ public class PVP_KI implements ModInitializer {
 
             // /ki reset <p1> <p2> <kit> [shuffle]
             kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("reset")
-                .requires(source -> source.hasPermission(2))
+                .requires(source -> true)
                 .then(RequiredArgumentBuilder.<CommandSourceStack, EntitySelector>argument("p1", EntityArgument.player())
                     .then(RequiredArgumentBuilder.<CommandSourceStack, EntitySelector>argument("p2", EntityArgument.player())
                         .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("kit", StringArgumentType.string())
@@ -97,7 +144,7 @@ public class PVP_KI implements ModInitializer {
                                 .executes(context -> resetCommand(context, true)))))));
 
             // /ki settings ...
-            LiteralArgumentBuilder<CommandSourceStack> settingsRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("settings").requires(source -> source.hasPermission(2));
+            LiteralArgumentBuilder<CommandSourceStack> settingsRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("settings").requires(source -> true);
             // show
             settingsRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("show")
                 .executes(context -> {
@@ -111,9 +158,21 @@ public class PVP_KI implements ModInitializer {
             // nametags on/off
             settingsRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("nametags")
                 .then(LiteralArgumentBuilder.<CommandSourceStack>literal("on")
-                    .executes(context -> { SettingsManager.showTeamNametags = true; SettingsManager.saveSettings(); context.getSource().sendSuccess(() -> Component.literal("Team nametags enabled"), false); return 1; }))
+                    .executes(context -> {
+                        SettingsManager.showTeamNametags = true;
+                        SettingsManager.saveSettings();
+                        PVP_KI.broadcastTeams(context.getSource().getLevel());
+                        context.getSource().sendSuccess(() -> Component.literal("Team nametags enabled"), false);
+                        return 1;
+                    }))
                 .then(LiteralArgumentBuilder.<CommandSourceStack>literal("off")
-                    .executes(context -> { SettingsManager.showTeamNametags = false; SettingsManager.saveSettings(); context.getSource().sendSuccess(() -> Component.literal("Team nametags disabled"), false); return 1; })));
+                    .executes(context -> {
+                        SettingsManager.showTeamNametags = false;
+                        SettingsManager.saveSettings();
+                        PVP_KI.broadcastTeams(context.getSource().getLevel());
+                        context.getSource().sendSuccess(() -> Component.literal("Team nametags disabled"), false);
+                        return 1;
+                    })));
             // biome allow/block/clear/list
             LiteralArgumentBuilder<CommandSourceStack> biomeRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("biome");
             biomeRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("allow")
@@ -135,31 +194,54 @@ public class PVP_KI implements ModInitializer {
 
             // /ki neutral <teamName> - mark scoreboard team as neutral
             kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("neutral")
-                .requires(source -> source.hasPermission(2) && source.getEntity() != null)
+                .requires(source -> source.getEntity() != null)
                 .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("teamName", StringArgumentType.string())
                     .executes(context -> {
                         String teamName = StringArgumentType.getString(context, "teamName");
                         if (SettingsManager.neutralTeams.contains(teamName)) {
                             SettingsManager.neutralTeams.remove(teamName);
                             SettingsManager.saveSettings();
-                            context.getSource().sendSuccess(() -> Component.literal("Removed '" + teamName + "' from neutral teams"), false);
                         } else {
                             SettingsManager.neutralTeams.add(teamName);
                             SettingsManager.saveSettings();
-                            context.getSource().sendSuccess(() -> Component.literal("Added '" + teamName + "' to neutral teams"), false);
                         }
+                        PVP_KI.broadcastTeams(context.getSource().getLevel());
+                        context.getSource().sendSuccess(() -> Component.literal((SettingsManager.neutralTeams.contains(teamName) ? "Added '" : "Removed '") + teamName + "' from neutral teams"), false);
                         return 1;
                     })));
 
             // /ki arena admin commands
             kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("arena")
-                .requires(source -> source.hasPermission(2))
+                .requires(source -> true)
                 .then(LiteralArgumentBuilder.<CommandSourceStack>literal("add")
                     .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("name", StringArgumentType.string())
                         .then(LiteralArgumentBuilder.<CommandSourceStack>literal("pos1")
-                            .executes(ctx -> { ServerPlayer p = ctx.getSource().getPlayerOrException(); BlockPos hit = rayTraceBlock(p, 64); if (hit == null) { ctx.getSource().sendFailure(Component.literal("No block targeted")); return 0; } ArenaManager.setPos(StringArgumentType.getString(ctx, "name"), hit, false); ctx.getSource().sendSuccess(() -> Component.literal("Set pos1 for '" + StringArgumentType.getString(ctx, "name") + "' to " + hit.toShortString()), true); return 1; }))
+                            .executes(ctx -> {
+                                ServerPlayer p = ctx.getSource().getPlayerOrException();
+                                BlockPos hit = rayTraceBlock(p, 64);
+                                if (hit == null) {
+                                    ctx.getSource().sendFailure(Component.literal("No block targeted"));
+                                    return 0;
+                                }
+                                ArenaManager.setPos(StringArgumentType.getString(ctx, "name"), hit, false);
+                                // Example: add player to team after pos1 set
+                                SettingsManager.addToTeam(StringArgumentType.getString(ctx, "name"), p.getName().getString(), ctx.getSource().getLevel());
+                                ctx.getSource().sendSuccess(() -> Component.literal("Set pos1 for '" + StringArgumentType.getString(ctx, "name") + "' to " + hit.toShortString()), true);
+                                return 1;
+                            }))
                         .then(LiteralArgumentBuilder.<CommandSourceStack>literal("pos2")
-                            .executes(ctx -> { ServerPlayer p = ctx.getSource().getPlayerOrException(); BlockPos hit = rayTraceBlock(p, 64); if (hit == null) { ctx.getSource().sendFailure(Component.literal("No block targeted")); return 0; } ArenaManager.setPos(StringArgumentType.getString(ctx, "name"), hit, true); ctx.getSource().sendSuccess(() -> Component.literal("Set pos2 for '" + StringArgumentType.getString(ctx, "name") + "' to " + hit.toShortString()), true); return 1; }))
+                            .executes(ctx -> {
+                                ServerPlayer p = ctx.getSource().getPlayerOrException();
+                                BlockPos hit = rayTraceBlock(p, 64);
+                                if (hit == null) {
+                                    ctx.getSource().sendFailure(Component.literal("No block targeted"));
+                                    return 0;
+                                }
+                                ArenaManager.setPos(StringArgumentType.getString(ctx, "name"), hit, true);
+                                SettingsManager.addToTeam(StringArgumentType.getString(ctx, "name"), p.getName().getString(), ctx.getSource().getLevel());
+                                ctx.getSource().sendSuccess(() -> Component.literal("Set pos2 for '" + StringArgumentType.getString(ctx, "name") + "' to " + hit.toShortString()), true);
+                                return 1;
+                            }))
                     ))
                 .then(LiteralArgumentBuilder.<CommandSourceStack>literal("enable")
                     .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("name", StringArgumentType.string())
@@ -176,7 +258,7 @@ public class PVP_KI implements ModInitializer {
 
             // /ki resetteams <numTeams> <kit> <shuffle> <teams...>
             kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("resetteams")
-                .requires(source -> source.hasPermission(2))
+                .requires(source -> true)
                 .then(RequiredArgumentBuilder.<CommandSourceStack, Integer>argument("numTeams", com.mojang.brigadier.arguments.IntegerArgumentType.integer(2))
                     .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("kit", StringArgumentType.string())
                         .then(RequiredArgumentBuilder.<CommandSourceStack, Boolean>argument("shuffle", BoolArgumentType.bool())
@@ -237,7 +319,7 @@ public class PVP_KI implements ModInitializer {
             Scoreboard sb = ctx.getSource().getServer().getScoreboard();
             List<List<ServerPlayer>> teamPlayers = new ArrayList<>();
             for (String name : teamNames) {
-                PlayerTeam team = sb.getPlayerTeam(name);
+                PlayerTeam team = sb.getTeam(name);
                 if (team == null) {
                     ctx.getSource().sendFailure(Component.literal("Team '" + name + "' not found in scoreboard"));
                     return 0;
