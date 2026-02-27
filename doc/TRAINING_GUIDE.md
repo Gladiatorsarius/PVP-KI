@@ -1,6 +1,4 @@
-================================================================================
-                    PVP AI TRAINING GUIDE - COMPLETE WALKTHROUGH
-================================================================================
+# PVP AI TRAINING GUIDE - COMPLETE WALKTHROUGH
 
 ⚠️ IMPORTANT: This project already has a complete training system implemented!
    You don't need to write Python code - just use the provided files.

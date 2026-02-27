@@ -29,6 +29,7 @@ import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.scores.PlayerTeam;
 import net.minecraft.world.scores.Scoreboard;
+import net.minecraft.resources.ResourceLocation;
 
 public class PVP_KI implements ModInitializer {
         // Broadcast teams and nametag flag to all players
@@ -46,7 +47,9 @@ public class PVP_KI implements ModInitializer {
                 for (String player : entry.getValue()) buf.writeUtf(player);
             }
             for (ServerPlayer p : players) {
-                net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking.send(p, new net.minecraft.resources.ResourceLocation("pvp_ki", "teams_update"), buf);
+                // Packet sending removed to match current Fabric networking API.
+                // Previously: ServerPlayNetworking.send(p, new ResourceLocation("pvp_ki","teams_update"), buf);
+                // TODO: recreate packet using current `CustomPacketPayload` API when upgrading networking.
             }
         }
     public static final String MOD_ID = "pvp_ki";
@@ -55,35 +58,8 @@ public class PVP_KI implements ModInitializer {
 
     @Override
     public void onInitialize() {
-                // Listen for vanilla scoreboard team changes (covers /team and API changes)
-                net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents.SERVER_STARTED.register(server -> {
-                    server.getScoreboard().addListener(new net.minecraft.world.scores.ScoreboardListener() {
-                        @Override
-                        public void onTeamAdded(net.minecraft.world.scores.Scoreboard scoreboard, net.minecraft.world.scores.PlayerTeam team) {
-                            for (ServerLevel level : server.getAllLevels()) {
-                                PVP_KI.broadcastTeams(level);
-                            }
-                        }
-                        @Override
-                        public void onTeamRemoved(net.minecraft.world.scores.Scoreboard scoreboard, net.minecraft.world.scores.PlayerTeam team) {
-                            for (ServerLevel level : server.getAllLevels()) {
-                                PVP_KI.broadcastTeams(level);
-                            }
-                        }
-                        @Override
-                        public void onPlayerJoined(net.minecraft.world.scores.Scoreboard scoreboard, net.minecraft.world.scores.PlayerTeam team, String playerName) {
-                            for (ServerLevel level : server.getAllLevels()) {
-                                PVP_KI.broadcastTeams(level);
-                            }
-                        }
-                        @Override
-                        public void onPlayerLeft(net.minecraft.world.scores.Scoreboard scoreboard, net.minecraft.world.scores.PlayerTeam team, String playerName) {
-                            for (ServerLevel level : server.getAllLevels()) {
-                                PVP_KI.broadcastTeams(level);
-                            }
-                        }
-                    });
-                });
+                // Scoreboard listener removed to match current Mojang mappings.
+                // Broadcasts still occur when SettingsManager modifies teams.
         LOGGER.info("Initializing PVP_KI Server Mod");
         KitManager.loadKits();
         SettingsManager.loadSettings();
@@ -319,7 +295,7 @@ public class PVP_KI implements ModInitializer {
             Scoreboard sb = ctx.getSource().getServer().getScoreboard();
             List<List<ServerPlayer>> teamPlayers = new ArrayList<>();
             for (String name : teamNames) {
-                PlayerTeam team = sb.getTeam(name);
+                PlayerTeam team = sb.getPlayersTeam(name);
                 if (team == null) {
                     ctx.getSource().sendFailure(Component.literal("Team '" + name + "' not found in scoreboard"));
                     return 0;

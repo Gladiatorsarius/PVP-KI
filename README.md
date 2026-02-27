@@ -51,13 +51,13 @@ The Java mod communicates with the Python backend via IPC, allowing real-time co
    ```bash
    python main.py
    ```
-5. For training, refer to `doc/TRAINING_GUIDE.txt` and use scripts in `python/backend/`
+5. For training, refer to `doc/TRAINING_GUIDE.md` and use scripts in `python/backend/`
 
 ## Usage
 - Launch Minecraft with the mod installed
 - Start the Python backend for agent control and training
 - Use the UI in `python/frontend/UI.py` for agent management
-- For reinforcement learning, follow the steps in `doc/TRAINING_GUIDE.txt`
+- For reinforcement learning, follow the steps in `doc/TRAINING_GUID.md`
 - Example: To start training, run `python/backend/ppo_trainer.py`
 
 ## Documentation

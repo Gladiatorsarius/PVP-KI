@@ -1,0 +1,25 @@
+*** Begin Patch
+*** Update File: README.md
+@@
+-5. For training, refer to `doc/TRAINING_GUIDE.txt` and use scripts in `python/backend/`
++5. For training, refer to `doc/TRAINING_GUIDE.md` and use scripts in `python/backend/`
+@@
+-- For reinforcement learning, follow the steps in `doc/TRAINING_GUIDE.txt`
++- For reinforcement learning, follow the steps in `doc/TRAINING_GUIDE.md`
+*** End Patch
+
+*** Begin Patch
+*** Update File: doc\TRAINING_GUIDE.md
+@@
+-================================================================================
+-                    PVP AI TRAINING GUIDE - COMPLETE WALKTHROUGH
+-================================================================================
++# PVP AI TRAINING GUIDE - COMPLETE WALKTHROUGH
+*** End Patch
+
+Instructions:
+1. Create and switch to a branch: git checkout -b docs/formatting-fixes
+2. Apply the patch: git apply --whitespace=nowarn docs-formatting-fixes.patch
+3. Stage and commit: git add README.md doc/TRAINING_GUIDE.md && git commit -m "docs: format README and TRAINING_GUIDE.md"
+
+If git apply fails, run: git apply --index docs-formatting-fixes.patch
