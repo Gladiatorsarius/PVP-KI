@@ -62,6 +62,21 @@ class DummyBackendAdapter(QObject):
         self.reward.emit(r)
         self.log.emit(f"{self.name}: reward={r}")
 
+    def on_frame(self, header: dict, image):
+        # Received a frame from the connector; just log events for dummy
+        events = header.get('events', []) if isinstance(header, dict) else []
+        for e in events:
+            try:
+                self.log.emit(f"{self.name}: event={e}")
+            except Exception:
+                pass
+
+    def on_command(self, cmd: dict):
+        try:
+            self.log.emit(f"{self.name}: command={cmd}")
+        except Exception:
+            pass
+
 
 class SimpleBackendAdapter(QObject):
     """Simple adapter that wraps a real AgentController instance.
@@ -106,6 +121,41 @@ class SimpleBackendAdapter(QObject):
             self.connected.emit()
         except Exception as e:
             self.log.emit(f"Error connecting {getattr(self._ctrl, 'name', '')}: {e}")
+
+    def on_frame(self, header: dict, image):
+        # Called when a frame arrives for this agent. Parse events for HITs
+        events = header.get('events', []) if isinstance(header, dict) else []
+        for ev in events:
+            if not isinstance(ev, str):
+                continue
+            if ev.startswith('EVENT:HIT:'):
+                parts = ev.split(':')
+                # Format: EVENT:HIT:attacker:target(:relation)
+                attacker = parts[2] if len(parts) > 2 else None
+                target = parts[3] if len(parts) > 3 else None
+                relation = parts[4] if len(parts) > 4 else None
+                if relation == 'team':
+                    self.log.emit(f"{self._ctrl.name}: teammate hit ignored ({attacker}->{target})")
+                else:
+                    # Apply a small penalty for non-team hits
+                    try:
+                        self.reward.emit(-1.0)
+                        self.log.emit(f"{self._ctrl.name}: penalty applied for {attacker}->{target} (relation={relation})")
+                    except Exception:
+                        pass
+
+    def on_command(self, cmd: dict):
+        try:
+            self.log.emit(f"{getattr(self._ctrl, 'name', '')}: command={cmd}")
+            # basic handling for RESET
+            if isinstance(cmd, dict) and cmd.get('type') == 'RESET':
+                try:
+                    self.stop()
+                    self.start()
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def disconnect(self):
         try:

@@ -215,9 +215,10 @@ public class PVP_KIClient implements ClientModInitializer {
 				.then(ClientCommandManager.argument("id", IntegerArgumentType.integer(1, 100))
 					.executes(context -> {
 						int id = IntegerArgumentType.getInteger(context, "id");
-						// Agent 1 = port 9999, Agent 2 = port 10001, Agent 3 = 10002, etc.
+						// Agent 1 = port 9999, Agent 2 = port 10000, Agent 3 = 10001, etc.
 						// Command port is 9998 (no longer conflicts)
-						int port = (id == 1) ? 9999 : (10000 + id - 1);
+						// Use consecutive ports starting at 9999: port = 9998 + id
+						int port = 9998 + id;
 						
 						currentAgentId = id;
 						startIPC(port);

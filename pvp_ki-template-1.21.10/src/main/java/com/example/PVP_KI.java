@@ -14,6 +14,7 @@ import net.minecraft.world.entity.player.Player;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.LiteralArgumentBuilder;
 import com.mojang.brigadier.builder.RequiredArgumentBuilder;
+import com.mojang.brigadier.suggestion.SuggestionProvider;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -22,6 +23,14 @@ import java.util.*;
 import com.mojang.brigadier.arguments.BoolArgumentType;
 import net.minecraft.core.BlockPos;
 import net.minecraft.server.level.ServerLevel;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
+import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
+import net.fabricmc.fabric.api.networking.v1.ServerPlayConnectionEvents;
+import java.lang.reflect.InvocationHandler;
+import java.lang.reflect.Method;
+import java.lang.reflect.Proxy;
+import java.util.Locale;
+import java.util.concurrent.ConcurrentHashMap;
 import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.chunk.LevelChunk;
 import net.minecraft.world.phys.BlockHitResult;
@@ -29,32 +38,32 @@ import net.minecraft.world.phys.HitResult;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.scores.PlayerTeam;
 import net.minecraft.world.scores.Scoreboard;
-import net.minecraft.resources.ResourceLocation;
+import net.minecraft.network.protocol.game.ClientboundSetPlayerTeamPacket;
 
 public class PVP_KI implements ModInitializer {
         // Broadcast teams and nametag flag to all players
         public static void broadcastTeams(ServerLevel server) {
-            List<ServerPlayer> players = server.getServer().getPlayerList().getPlayers();
-            net.minecraft.network.FriendlyByteBuf buf = new net.minecraft.network.FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
-            buf.writeBoolean(SettingsManager.showTeamNametags);
-            buf.writeInt(SettingsManager.neutralTeams.size());
-            for (String team : SettingsManager.neutralTeams) buf.writeUtf(team);
-            // Write teams
-            buf.writeInt(SettingsManager.teams.size());
-            for (Map.Entry<String, Set<String>> entry : SettingsManager.teams.entrySet()) {
-                buf.writeUtf(entry.getKey());
-                buf.writeInt(entry.getValue().size());
-                for (String player : entry.getValue()) buf.writeUtf(player);
-            }
-            for (ServerPlayer p : players) {
-                // Packet sending removed to match current Fabric networking API.
-                // Previously: ServerPlayNetworking.send(p, new ResourceLocation("pvp_ki","teams_update"), buf);
-                // TODO: recreate packet using current `CustomPacketPayload` API when upgrading networking.
-            }
+                List<ServerPlayer> players = server.getServer().getPlayerList().getPlayers();
+                // Use Minecraft's built-in team packet to notify clients about teams.
+                Scoreboard sb = server.getServer().getScoreboard();
+                for (String teamName : SettingsManager.teams.keySet()) {
+                    PlayerTeam team = sb.getPlayersTeam(teamName);
+                    if (team == null) continue;
+                    ClientboundSetPlayerTeamPacket pkt = ClientboundSetPlayerTeamPacket.createAddOrModifyPacket(team, true);
+                    for (ServerPlayer p : players) {
+                        try {
+                            p.connection.send(pkt);
+                        } catch (Throwable t) {
+                            // best-effort send; ignore per-player failures
+                        }
+                    }
+                }
         }
     public static final String MOD_ID = "pvp_ki";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
     public static Process pythonProcess = null;
+    // Snapshot of scoreboard teams to detect changes when a mapped listener isn't available
+    private static volatile Map<String, Set<String>> lastTeamSnapshot = new HashMap<>();
 
     @Override
     public void onInitialize() {
@@ -169,22 +178,78 @@ public class PVP_KI implements ModInitializer {
             kiRoot.then(settingsRoot);
 
             // /ki neutral <teamName> - mark scoreboard team as neutral
-            kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("neutral")
-                .requires(source -> source.getEntity() != null)
+            LiteralArgumentBuilder<CommandSourceStack> neutralRoot = LiteralArgumentBuilder.<CommandSourceStack>literal("neutral")
+                .requires(source -> source.getEntity() != null);
+
+            // Suggest existing scoreboard team names for the add/remove subcommands
+            SuggestionProvider<CommandSourceStack> teamSuggestionNonNeutral = (context, builder) -> {
+                try {
+                    ServerLevel lvl = (ServerLevel) context.getSource().getLevel();
+                    Scoreboard sb = lvl.getScoreboard();
+                    for (PlayerTeam t : sb.getPlayerTeams()) {
+                        if (!SettingsManager.neutralTeams.contains(t.getName())) builder.suggest(t.getName());
+                    }
+                } catch (Throwable ignored) {
+                }
+                return builder.buildFuture();
+            };
+
+            SuggestionProvider<CommandSourceStack> teamSuggestionNeutral = (context, builder) -> {
+                try {
+                    ServerLevel lvl = (ServerLevel) context.getSource().getLevel();
+                    Scoreboard sb = lvl.getScoreboard();
+                    for (PlayerTeam t : sb.getPlayerTeams()) {
+                        if (SettingsManager.neutralTeams.contains(t.getName())) builder.suggest(t.getName());
+                    }
+                } catch (Throwable ignored) {
+                }
+                return builder.buildFuture();
+            };
+
+            // /ki neutral add <teamName> (suggest only non-neutral teams)
+            neutralRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("add")
                 .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("teamName", StringArgumentType.string())
+                    .suggests(teamSuggestionNonNeutral)
+                    .executes(context -> {
+                        String teamName = StringArgumentType.getString(context, "teamName");
+                        if (SettingsManager.neutralTeams.contains(teamName)) {
+                            // team already neutral — benign message
+                            context.getSource().sendSuccess(() -> Component.literal(teamName + " is already neutral"), false);
+                        } else {
+                            SettingsManager.neutralTeams.add(teamName);
+                            SettingsManager.saveSettings();
+                            PVP_KI.broadcastTeams(context.getSource().getLevel());
+                            context.getSource().sendSuccess(() -> Component.literal("Added '" + teamName + "' to neutral teams"), false);
+                        }
+                        return 1;
+                    })));
+
+            // /ki neutral remove <teamName> (suggest only neutral teams)
+            neutralRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("remove")
+                .then(RequiredArgumentBuilder.<CommandSourceStack, String>argument("teamName", StringArgumentType.string())
+                    .suggests(teamSuggestionNeutral)
                     .executes(context -> {
                         String teamName = StringArgumentType.getString(context, "teamName");
                         if (SettingsManager.neutralTeams.contains(teamName)) {
                             SettingsManager.neutralTeams.remove(teamName);
                             SettingsManager.saveSettings();
+                            PVP_KI.broadcastTeams(context.getSource().getLevel());
+                            context.getSource().sendSuccess(() -> Component.literal("Removed '" + teamName + "' from neutral teams"), false);
                         } else {
-                            SettingsManager.neutralTeams.add(teamName);
-                            SettingsManager.saveSettings();
+                            context.getSource().sendSuccess(() -> Component.literal(teamName + " is not neutral"), false);
                         }
-                        PVP_KI.broadcastTeams(context.getSource().getLevel());
-                        context.getSource().sendSuccess(() -> Component.literal((SettingsManager.neutralTeams.contains(teamName) ? "Added '" : "Removed '") + teamName + "' from neutral teams"), false);
                         return 1;
                     })));
+
+            // /ki neutral list - show all configured neutral teams
+            neutralRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("list")
+                .executes(context -> {
+                    String msg = SettingsManager.neutralTeams.isEmpty() ? "No neutral teams configured" : String.join(", ", SettingsManager.neutralTeams);
+                    context.getSource().sendSuccess(() -> Component.literal("Neutral teams: " + msg), false);
+                    return 1;
+                }));
+
+            kiRoot.then(neutralRoot);
 
             // /ki arena admin commands
             kiRoot.then(LiteralArgumentBuilder.<CommandSourceStack>literal("arena")
@@ -420,13 +485,39 @@ public class PVP_KI implements ModInitializer {
         ServerPlayer p2 = EntityArgument.getPlayer(context, "p2");
         String kitName = StringArgumentType.getString(context, "kit");
         boolean shuffle = hasShuffle && BoolArgumentType.getBool(context, "shuffle");
-
         if ("random".equalsIgnoreCase(kitName)) {
             kitName = KitManager.getRandomKit();
         }
 
-        // Find fresh location with unmodified chunks and matching biome filters
         ServerLevel level = (ServerLevel) p1.level();
+
+        // If reset mode is arena, place both players on arena pads
+        boolean arenaMode = "arena".equalsIgnoreCase(SettingsManager.resetMode);
+        if (arenaMode) {
+            List<ArenaManager.ArenaConfig> enabled = ArenaManager.getEnabled();
+            if (enabled.isEmpty()) {
+                context.getSource().sendFailure(Component.literal("No enabled arenas"));
+                return 0;
+            }
+            ArenaManager.ArenaConfig arena = enabled.get(new java.util.Random().nextInt(enabled.size()));
+            List<BlockPos> pads = ArenaManager.findWhiteWoolPads(level, arena);
+            if (pads.size() < 2) {
+                context.getSource().sendFailure(Component.literal("Arena '" + arena.name + "' does not have enough pads"));
+                return 0;
+            }
+            Collections.shuffle(pads);
+            BlockPos pad1 = pads.get(0);
+            BlockPos pad2 = pads.get(1);
+            double ty1 = pad1.getY() + 1.0;
+            double ty2 = pad2.getY() + 1.0;
+            teleportAndApply(p1, pad1.getX() + 0.5, ty1, pad1.getZ() + 0.5, kitName, shuffle);
+            teleportAndApply(p2, pad2.getX() + 0.5, ty2, pad2.getZ() + 0.5, kitName, shuffle);
+            ServerIPCClient.sendCommand("RESET", p1.getName().getString() + "," + p2.getName().getString());
+            context.getSource().sendSuccess(() -> Component.literal("Reset to arena '" + arena.name + "' with kit '" + kitName + "'"), true);
+            return 1;
+        }
+
+        // World mode (fallback)
         double x = 0, z = 0;
         int attempts = 0;
         boolean foundSuitable = false;
@@ -524,6 +615,97 @@ public class PVP_KI implements ModInitializer {
                 LOGGER.info("EVENT:DEATH:" + victim + ":" + killer);
             }
         });
+
+        // Broadcast teams when players join or disconnect so clients receive up-to-date team state immediately
+        ServerPlayConnectionEvents.JOIN.register((handler, sender, server) -> {
+            try {
+                server.execute(() -> {
+                    try { PVP_KI.broadcastTeams(server.overworld()); } catch (Throwable t) { }
+                });
+            } catch (Throwable t) { }
+        });
+        ServerPlayConnectionEvents.DISCONNECT.register((handler, server) -> {
+            try {
+                server.execute(() -> {
+                    try { PVP_KI.broadcastTeams(server.overworld()); } catch (Throwable t) { }
+                });
+            } catch (Throwable t) { }
+        });
+
+        // Try to register a native scoreboard listener on server start; fall back to polling if unavailable.
+        ServerLifecycleEvents.SERVER_STARTED.register(server -> {
+            boolean registered = false;
+            try {
+                Scoreboard sb = server.getScoreboard();
+                // Find an "addListener" method that accepts an interface type
+                Method addListener = null;
+                for (Method m : sb.getClass().getMethods()) {
+                    if (m.getName().equals("addListener") && m.getParameterCount() == 1 && m.getParameterTypes()[0].isInterface()) {
+                        addListener = m;
+                        break;
+                    }
+                }
+                if (addListener != null) {
+                    Class<?> listenerType = addListener.getParameterTypes()[0];
+                    final java.util.Set<String> seenMethods = ConcurrentHashMap.newKeySet();
+                    InvocationHandler handler = (proxy, method, args) -> {
+                        try {
+                            String methodName = method.getName();
+                            if (seenMethods.add(methodName)) {
+                                LOGGER.debug("Scoreboard listener method: {}", methodName);
+                            }
+                            String lower = methodName.toLowerCase(Locale.ROOT);
+                            boolean isTeamCallback = lower.contains("team") || lower.contains("teams") || lower.contains("playerteam") || lower.contains("teamchange") || lower.contains("teamadded") || lower.contains("teamremoved") || lower.contains("jointeam") || lower.contains("leaveteam") || lower.contains("playerjoin") || lower.contains("playerleave");
+                            if (isTeamCallback) {
+                                try { broadcastTeams(server.overworld()); } catch (Throwable t) { }
+                            }
+                        } catch (Throwable t) {
+                        }
+                        return null;
+                    };
+                    Object proxy = Proxy.newProxyInstance(listenerType.getClassLoader(), new Class<?>[]{listenerType}, handler);
+                    addListener.invoke(sb, proxy);
+                    registered = true;
+                    LOGGER.info("Registered scoreboard listener via reflection: " + addListener);
+                }
+            } catch (Throwable t) {
+                LOGGER.debug("Scoreboard listener reflection failed, will fall back to tick poller", t);
+            }
+
+            if (!registered) {
+                // Fall back: poll at end of server tick
+                try {
+                    ServerTickEvents.END_SERVER_TICK.register(s -> {
+                        ServerLevel lvl = s.overworld();
+                        if (lvl == null) return;
+                        Map<String, Set<String>> snap = captureTeamsSnapshot(lvl);
+                        if (!snap.equals(lastTeamSnapshot)) {
+                            lastTeamSnapshot = snap;
+                            broadcastTeams(lvl);
+                        }
+                    });
+                    LOGGER.info("Scoreboard listener not found; using tick poller fallback.");
+                } catch (Throwable t) {
+                    LOGGER.warn("Failed to register scoreboard poller fallback", t);
+                }
+            }
+        });
+    }
+
+    private static Map<String, Set<String>> captureTeamsSnapshot(ServerLevel level) {
+        Map<String, Set<String>> out = new HashMap<>();
+        try {
+            Scoreboard sb = level.getScoreboard();
+            for (String teamName : sb.getTeamNames()) {
+                PlayerTeam team = sb.getPlayersTeam(teamName);
+                if (team == null) continue;
+                Set<String> members = new HashSet<>(team.getPlayers());
+                out.put(teamName, members);
+            }
+        } catch (Throwable t) {
+            // ignore reflection/mapping issues
+        }
+        return out;
     }
 
     private String computeRelation(ServerPlayer attacker, ServerPlayer target) {

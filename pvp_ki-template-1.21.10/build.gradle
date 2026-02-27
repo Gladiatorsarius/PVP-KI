@@ -41,9 +41,10 @@ dependencies {
 
 	// Gson for JSON parsing (latest stable)
 	modImplementation 'com.google.code.gson:gson:2.10.1'
-	// Add SLF4J for improved logging if not present
+	// Add SLF4J API only; do not add a simple logger runtime binding
+	// Minecraft provides a log4j SLF4J binding at runtime — including
+	// slf4j-simple here causes a logging recursion / StackOverflowError.
 	implementation 'org.slf4j:slf4j-api:2.0.13'
-	runtimeOnly 'org.slf4j:slf4j-simple:2.0.13'
 	
 }
 

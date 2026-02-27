@@ -6,6 +6,7 @@ import numpy as np
 import cv2
 import time
 import threading
+from .ipc_connector import SocketConnector
 try:
     from .model import PVPModel
     from .ppo_trainer import PPOTrainer, ExperienceBuffer
@@ -23,7 +24,8 @@ class AgentController:
         self.thread = None
         self.shared_model = shared_model
         self.ppo_trainer = ppo_trainer
-        self.client_socket = None  # Socket connection to Minecraft mod (set during loop)
+        self.client_socket = None  # legacy field
+        self.socket = None  # SocketConnector instance
 
     def start(self):
         if self.running:
@@ -42,34 +44,62 @@ class AgentController:
             self.thread.join()
 
     def run_loop(self):
+        # Main worker loop for agent (training, bookkeeping). Incoming frames
+        # are handled by the SocketConnector _on_frame callback.
         while not self.stop_event.is_set():
             try:
-                # Example: Receive data from the socket
-                data = self.receive_data()
-                if data:
-                    self.process_data(data)
+                # sleep briefly to yield CPU and allow callbacks to run
+                time.sleep(0.1)
             except Exception as e:
                 print(f"Error in agent loop {self.name}: {e}")
 
     def receive_data(self):
-        if not self.client_socket:
-            return None
-        try:
-            data = self.client_socket.recv(1024)
-            return json.loads(data.decode('utf-8'))
-        except Exception as e:
-            print(f"Error receiving data: {e}")
-            return None
+        # legacy method kept for compatibility
+        return None
 
     def process_data(self, data):
         # Process incoming data from the Minecraft mod
         print(f"Processing data for {self.name}: {data}")
 
+    # --- new socket-based methods ---
+    def connect(self, host: str = '127.0.0.1'):
+        if self.socket:
+            return
+        self.socket = SocketConnector(host=host, port=self.port,
+                                      on_message=self._on_frame,
+                                      on_disconnect=self._on_disconnect)
+        self.socket.start()
+
+    def disconnect(self):
+        if self.socket:
+            try:
+                self.socket.stop()
+            except Exception:
+                pass
+            self.socket = None
+
+    def _on_frame(self, header: dict, body: bytes):
+        # Called from SocketConnector reader thread when a full frame arrives.
+        try:
+            # decode image if present
+            img = None
+            if body:
+                img = SocketConnector.decode_image(body)
+            # deliver header and image to processing pipeline
+            self.process_data({'header': header, 'image': img})
+        except Exception as e:
+            print(f"Error processing frame for {self.name}: {e}")
+
+    def _on_disconnect(self):
+        print(f"Agent {self.name} disconnected from port {self.port}")
+
     def send_action(self, action):
-        if not self.client_socket:
+        if not self.socket:
             print("No active connection to Minecraft mod")
             return
         try:
-            self.client_socket.send(json.dumps(action).encode('utf-8'))
+            payload = json.dumps(action).encode('utf-8')
+            # Java side expects a unsigned short length prefix for actions
+            self.socket.send_prefixed(payload, length_bytes=2)
         except Exception as e:
             print(f"Error sending action: {e}")
