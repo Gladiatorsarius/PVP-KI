@@ -1,4 +1,4 @@
-from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QPushButton, QLabel, QHBoxLayout, QScrollArea, QGridLayout
+from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QPushButton, QLabel, QHBoxLayout, QScrollArea, QGridLayout, QCheckBox, QLineEdit
 
 try:
     from .agent_controller import AgentControllerQt
@@ -23,6 +23,12 @@ class MainWindow(QMainWindow):
         self.remove_btn = QPushButton("- Remove Last")
         self.hide_btn = QPushButton("Hide All")
         self.show_btn = QPushButton("Show All")
+        # Gym options
+        self.use_gym_cb = QCheckBox("Use Gym env")
+        self.env_name_input = QLineEdit("MineRLObtainDiamond-v1")
+        self.env_name_input.setMaximumWidth(300)
+        btn_layout.addWidget(self.use_gym_cb)
+        btn_layout.addWidget(self.env_name_input)
         btn_layout.addWidget(self.add_btn)
         btn_layout.addWidget(self.remove_btn)
         btn_layout.addWidget(self.hide_btn)
@@ -66,7 +72,9 @@ class MainWindow(QMainWindow):
         idx = len(self.agent_controllers)
         name = f"Agent {idx+1}"
         port = 9999 + idx
-        backend = self.manager.create_agent(name, port, dummy=True)
+        use_gym = bool(self.use_gym_cb.isChecked())
+        env_name = str(self.env_name_input.text()).strip() or None
+        backend = self.manager.create_agent(name, port, dummy=False, use_gym=use_gym, env_name=env_name)
         agent = AgentControllerQt(name, port, backend_adapter=backend)
         self.agent_controllers.append(agent)
         self.agent_panel_layout.addWidget(agent, idx//3, idx%3)  # Arrange in 3 columns

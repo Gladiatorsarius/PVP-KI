@@ -1,16 +1,35 @@
 from .backend_adaptor import DummyBackendAdapter, SimpleBackendAdapter
-from .command_connector import CommandConnector
 
 
 class Manager:
     def __init__(self):
         self.agents = {}
-        # Start command listener (Java ServerIPCClient sends to 127.0.0.1:9998)
+        # Prepare command listener but do not start it automatically.
         try:
-            self._cmd = CommandConnector(self._handle_command)
-            self._cmd.start()
+            # try to import the optional CommandConnector (may be archived)
+            from .command_connector import CommandConnector
+            try:
+                self._cmd = CommandConnector(self._handle_command)
+            except Exception:
+                self._cmd = None
         except Exception:
             self._cmd = None
+
+    def start(self):
+        """Start optional services (command listener)."""
+        if getattr(self, '_cmd', None):
+            try:
+                self._cmd.start()
+            except Exception:
+                pass
+
+    def stop(self):
+        """Stop services cleanly."""
+        if getattr(self, '_cmd', None):
+            try:
+                self._cmd.stop()
+            except Exception:
+                pass
 
     def _handle_command(self, cmd: dict):
         # Simple dispatcher for incoming commands. Expected shape: {"type":..., "data":...}
@@ -35,7 +54,7 @@ class Manager:
             except Exception:
                 pass
 
-    def create_agent(self, name, port, dummy=False, shared_model=None, ppo_trainer=None):
+    def create_agent(self, name, port, dummy=False, shared_model=None, ppo_trainer=None, use_gym: bool = False, env_name: str = None):
         """Create and return a backend adapter for an agent.
         By default returns a real AgentController wrapped in SimpleBackendAdapter.
         Set `dummy=True` to use a DummyBackendAdapter instead for testing.
@@ -45,7 +64,18 @@ class Manager:
         else:
             # Import training_loop lazily to avoid heavy deps at module import time
             from . import training_loop
-            ctrl = training_loop.AgentController(name, port, shared_model=shared_model, ppo_trainer=ppo_trainer)
+            env_adapter = None
+            if use_gym and env_name:
+                try:
+                    # Lazy import to avoid requiring gym/minerl at module import time
+                    from .env_adapter import GymEnvAdapter
+                    import gym
+                    env = lambda: gym.make(env_name)
+                    env_adapter = GymEnvAdapter(env)
+                except Exception:
+                    env_adapter = None
+
+            ctrl = training_loop.AgentController(name, port, shared_model=shared_model, ppo_trainer=ppo_trainer, use_gym=use_gym, env_adapter=env_adapter)
             adapter = SimpleBackendAdapter(ctrl)
         self.agents[port] = adapter
         return adapter
