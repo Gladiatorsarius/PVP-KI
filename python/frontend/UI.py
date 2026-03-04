@@ -25,12 +25,6 @@ class MainWindow(QMainWindow):
         self.hide_btn = QPushButton("Hide All")
         self.show_btn = QPushButton("Show All")
         self.start_all_btn = QPushButton("Start All")
-        # Gym options
-        self.use_gym_cb = QCheckBox("Use Gym env")
-        self.env_name_input = QLineEdit("MineRLObtainDiamond-v1")
-        self.env_name_input.setMaximumWidth(300)
-        btn_layout.addWidget(self.use_gym_cb)
-        btn_layout.addWidget(self.env_name_input)
         btn_layout.addWidget(self.add_btn)
         btn_layout.addWidget(self.remove_btn)
         btn_layout.addWidget(self.hide_btn)
@@ -89,9 +83,7 @@ class MainWindow(QMainWindow):
         idx = len(self.agent_controllers)
         name = f"Agent {idx+1}"
         port = 9999 + idx
-        use_gym = bool(self.use_gym_cb.isChecked())
-        env_name = str(self.env_name_input.text()).strip() or None
-        backend = self.manager.create_agent(name, port, dummy=False, use_gym=use_gym, env_name=env_name)
+        backend = self.manager.create_agent(name, port, dummy=False)
         agent = AgentControllerQt(name, port, backend_adapter=backend)
         self.agent_controllers.append(agent)
         self.agent_panel_layout.addWidget(agent, idx//3, idx%3)  # Arrange in 3 columns

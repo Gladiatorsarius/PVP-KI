@@ -3,6 +3,9 @@
 
 import sys
 
+# Import torch BEFORE PyQt6 to avoid DLL conflicts on Windows
+import torch
+
 from PyQt6.QtWidgets import QApplication
 
 try:

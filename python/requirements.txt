@@ -1,6 +1,7 @@
 PyQt6
 opencv-python
-torch
+# For CUDA 11.8 support: pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cu118
+torch>=2.7.0
 numpy
 Pillow
 pytest

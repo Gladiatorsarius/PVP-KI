@@ -117,7 +117,7 @@ class Manager:
             except Exception:
                 pass
 
-    def create_agent(self, name, port, dummy=False, shared_model=None, ppo_trainer=None, use_gym: bool = False, env_name: str = None):
+    def create_agent(self, name, port, dummy=False, shared_model=None, ppo_trainer=None):
         """Create and return a backend adapter for an agent.
         By default returns a real AgentController wrapped in SimpleBackendAdapter.
         Set `dummy=True` to use a DummyBackendAdapter instead for testing.
@@ -126,17 +126,7 @@ class Manager:
             adapter = DummyBackendAdapter(name, port)
         else:
             from . import training_loop
-            env_adapter = None
-            if use_gym and env_name:
-                try:
-                    from .env_adapter import GymEnvAdapter
-                    import gym
-                    env = lambda: gym.make(env_name)
-                    env_adapter = GymEnvAdapter(env)
-                except Exception:
-                    env_adapter = None
-
-            ctrl = training_loop.AgentController(name, port, shared_model=shared_model, ppo_trainer=ppo_trainer, use_gym=use_gym, env_adapter=env_adapter)
+            ctrl = training_loop.AgentController(name, port, shared_model=shared_model, ppo_trainer=ppo_trainer)
             adapter = SimpleBackendAdapter(ctrl)
         self.agents[port] = adapter
         return adapter
