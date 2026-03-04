@@ -22,6 +22,14 @@ import com.mojang.brigadier.arguments.IntegerArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 
 public class PVP_KIClient implements ClientModInitializer {
+	/**
+	 * Protocol v1 alignment:
+	 * - Server-side mod is authoritative for reset/combat event delivery.
+	 * - VM runtime owns capture/input injection in distributed mode.
+	 * Legacy in-mod client IPC is therefore disabled by default.
+	 */
+	public static final boolean ENABLE_LEGACY_CLIENT_IPC = false;
+
 	public static IPCManager ipcManager;
 	public static JsonObject pendingAction;
 	public static final List<String> eventQueue = Collections.synchronizedList(new ArrayList<>());
@@ -32,14 +40,20 @@ public class PVP_KIClient implements ClientModInitializer {
 
 	@Override
 	public void onInitializeClient() {
-		// Start default IPC (Agent 1)
-		startIPC(9999);
+		// Legacy local IPC path is intentionally disabled by default for Protocol v1.
+		if (ENABLE_LEGACY_CLIENT_IPC) {
+			startIPC(9999);
+		}
 		
 		// Register nametag overlay renderer
 		NametagOverlayRenderer.register();
 		
-		// Register client-side event detection
-		registerClientEvents();		// Register commands
+		// Register client-side event detection only in legacy local mode.
+		if (ENABLE_LEGACY_CLIENT_IPC) {
+			registerClientEvents();
+		}
+
+		// Register commands
 		ClientCommandRegistrationCallback.EVENT.register((dispatcher, registryAccess) -> {
 			// Forward /ki ... to the server
 			dispatcher.register(ClientCommandManager.literal("ki")
@@ -86,6 +100,10 @@ public class PVP_KIClient implements ClientModInitializer {
 		// Debug command /testframe to send ONE frame to Python for testing
 		dispatcher.register(ClientCommandManager.literal("testframe")
 				.executes(context -> {
+					if (!ENABLE_LEGACY_CLIENT_IPC) {
+						context.getSource().sendFeedback(Component.literal("§eLegacy client frame capture is disabled (Protocol v1)."));
+						return 1;
+					}
 					if (ipcManager != null && ipcManager.isActive()) {
 						Minecraft mc = Minecraft.getInstance();
 						if (mc.player != null) {
@@ -101,22 +119,34 @@ public class PVP_KIClient implements ClientModInitializer {
 					return 1;
 				}));
 
-		// Client-side reward control (does not rely on server mod)
+		// Legacy client-side reward control (disabled in Protocol v1 mode)
 		dispatcher.register(ClientCommandManager.literal("reward")
 			.then(ClientCommandManager.literal("start")
 				.executes(context -> {
+					if (!ENABLE_LEGACY_CLIENT_IPC) {
+						context.getSource().sendFeedback(Component.literal("[reward] Legacy client command stream disabled (Protocol v1)."));
+						return 1;
+					}
 					ClientCommandQueue.enqueue("START", "Reward tracking started");
 					context.getSource().sendFeedback(Component.literal("[reward] START sent to Python"));
 					return 1;
 				}))
 			.then(ClientCommandManager.literal("stop")
 				.executes(context -> {
+					if (!ENABLE_LEGACY_CLIENT_IPC) {
+						context.getSource().sendFeedback(Component.literal("[reward] Legacy client command stream disabled (Protocol v1)."));
+						return 1;
+					}
 					ClientCommandQueue.enqueue("STOP", "Reward tracking stopped");
 					context.getSource().sendFeedback(Component.literal("[reward] STOP sent to Python"));
 					return 1;
 				}))
 			.then(ClientCommandManager.literal("reset")
 				.executes(context -> {
+					if (!ENABLE_LEGACY_CLIENT_IPC) {
+						context.getSource().sendFeedback(Component.literal("[reward] Legacy client command stream disabled (Protocol v1)."));
+						return 1;
+					}
 					ClientCommandQueue.enqueue("RESET", "Rewards reset to zero");
 					context.getSource().sendFeedback(Component.literal("[reward] RESET sent to Python"));
 					return 1;
@@ -210,10 +240,14 @@ public class PVP_KIClient implements ClientModInitializer {
 						return 1;
 					})));
 
-			// Client-side /agent <id> (switches IPC port locally, supports unlimited agents)
+			// Legacy client-side /agent <id> (disabled in Protocol v1 mode)
 			dispatcher.register(ClientCommandManager.literal("agent")
 				.then(ClientCommandManager.argument("id", IntegerArgumentType.integer(1, 100))
 					.executes(context -> {
+						if (!ENABLE_LEGACY_CLIENT_IPC) {
+							context.getSource().sendFeedback(Component.literal("Legacy client IPC mapping disabled (Protocol v1)."));
+							return 1;
+						}
 						int id = IntegerArgumentType.getInteger(context, "id");
 						// Agent 1 = port 9999, Agent 2 = port 10000, Agent 3 = 10001, etc.
 						// Command port is 9998 (no longer conflicts)
@@ -307,12 +341,12 @@ public class PVP_KIClient implements ClientModInitializer {
 					})));
 		});
 
-		// Register Chat Listener for Events, Team Data, and Death Messages
+		// Register Chat Listener for Team Data and optional legacy event parsing
 		ClientReceiveMessageEvents.GAME.register((message, overlay) -> {
 			String text = message.getString();
 			
-			// Handle explicit EVENT: messages
-			if (text.startsWith("EVENT:")) {
+			// Legacy-only: queue explicit EVENT messages
+			if (ENABLE_LEGACY_CLIENT_IPC && text.startsWith("EVENT:")) {
 				eventQueue.add(text);
 			}
 			
@@ -327,15 +361,10 @@ public class PVP_KIClient implements ClientModInitializer {
 				}
 			}
 			
-			// Parse death messages from chat (works on any server!)
-			// Common death message patterns:
-			// "Player was slain by Killer"
-			// "Player was shot by Killer"
-			// "Player was killed by Killer"
-			// "Player died"
-			// "Player fell from a high place"
-			// etc.
-			parseChatDeathMessage(text);
+			// Legacy-only: parse death messages from chat when local IPC mode is enabled.
+			if (ENABLE_LEGACY_CLIENT_IPC) {
+				parseChatDeathMessage(text);
+			}
 		});
 	}
 
@@ -419,7 +448,8 @@ public class PVP_KIClient implements ClientModInitializer {
 	}
 	
 	private void registerClientEvents() {
-		// Client-side attack detection
+		// Legacy-only client-side attack detection.
+		// Protocol v1 authoritative combat events are produced server-side.
 		AttackEntityCallback.EVENT.register((player, world, hand, entity, hitResult) -> {
 			if (player instanceof Player && entity instanceof Player) {
 				String attacker = player.getName().getString();

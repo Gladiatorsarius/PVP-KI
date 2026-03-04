@@ -40,6 +40,11 @@ import net.minecraft.world.scores.PlayerTeam;
 import net.minecraft.world.scores.Scoreboard;
 import net.minecraft.network.protocol.game.ClientboundSetPlayerTeamPacket;
 
+/**
+ * Server mod entrypoint.
+ * Protocol v1 authority note: server-side combat/reset events are canonical and
+ * are forwarded through the server IPC bridge; client capture/input is not authoritative.
+ */
 public class PVP_KI implements ModInitializer {
         // Broadcast teams and nametag flag to all players
         public static void broadcastTeams(ServerLevel server) {

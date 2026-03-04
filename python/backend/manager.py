@@ -1,13 +1,13 @@
-from .backend_adaptor import DummyBackendAdapter, SimpleBackendAdapter
+from .backend_adapter import DummyBackendAdapter, SimpleBackendAdapter
 
 
 class Manager:
     def __init__(self):
         self.agents = {}
-        # Prepare command listener but do not start it automatically.
+        self._status_listeners = []
+
         try:
-            # try to import the optional CommandConnector (may be archived)
-            from .command_connector import CommandConnector
+            from .command_bridge import CommandConnector
             try:
                 self._cmd = CommandConnector(self._handle_command)
             except Exception:
@@ -15,34 +15,97 @@ class Manager:
         except Exception:
             self._cmd = None
 
+        try:
+            from .coordinator import WebSocketCoordinator
+            self._coordinator = WebSocketCoordinator(status_hook=self._on_coordinator_status)
+        except Exception:
+            self._coordinator = None
+
     def start(self):
-        """Start optional services (command listener)."""
+        """Start optional services (command listener + coordinator)."""
         if getattr(self, '_cmd', None):
             try:
                 self._cmd.start()
-            except Exception:
-                pass
+                self._emit_status({'type': 'command_connector_started'})
+            except Exception as exc:
+                self._emit_status({'type': 'command_connector_error', 'error': str(exc)})
+
+        self.start_coordinator()
 
     def stop(self):
         """Stop services cleanly."""
         if getattr(self, '_cmd', None):
             try:
                 self._cmd.stop()
+                self._emit_status({'type': 'command_connector_stopped'})
             except Exception:
                 pass
 
-    def _handle_command(self, cmd: dict):
-        # Simple dispatcher for incoming commands. Expected shape: {"type":..., "data":...}
-        cmd_type = cmd.get('type') if isinstance(cmd, dict) else None
-        for port, adapter in list(self.agents.items()):
+        self.stop_coordinator()
+
+    def start_coordinator(self):
+        if not getattr(self, '_coordinator', None):
+            self._emit_status({'type': 'coordinator_unavailable'})
+            return False
+        try:
+            started = self._coordinator.start()
+            if started:
+                self._emit_status({'type': 'coordinator_start_requested'})
+            return bool(started)
+        except Exception as exc:
+            self._emit_status({'type': 'coordinator_error', 'error': str(exc)})
+            return False
+
+    def stop_coordinator(self):
+        if not getattr(self, '_coordinator', None):
+            return
+        try:
+            self._coordinator.stop()
+            self._emit_status({'type': 'coordinator_stop_requested'})
+        except Exception:
+            pass
+
+    def start_all(self):
+        """Global Start-All path for VM sessions that are currently ready."""
+        if not getattr(self, '_coordinator', None):
+            self._emit_status({'type': 'start_all_skipped', 'reason': 'coordinator_unavailable'})
+            return
+        self._coordinator.start_all()
+
+    def get_coordinator_status(self):
+        if not getattr(self, '_coordinator', None):
+            return {}
+        try:
+            return self._coordinator.status_snapshot()
+        except Exception:
+            return {}
+
+    def register_status_listener(self, listener):
+        if listener and listener not in self._status_listeners:
+            self._status_listeners.append(listener)
+
+    def _emit_status(self, payload: dict):
+        for listener in list(self._status_listeners):
             try:
-                # emit a log event on adapters for visibility
+                listener(payload)
+            except Exception:
+                pass
+
+    def _on_coordinator_status(self, payload: dict):
+        self._emit_status(payload)
+
+    def _handle_command(self, cmd: dict):
+        cmd_type = cmd.get('type') if isinstance(cmd, dict) else None
+        if cmd_type == 'START_ALL':
+            self.start_all()
+
+        for _, adapter in list(self.agents.items()):
+            try:
                 if hasattr(adapter, 'log'):
                     try:
                         adapter.log.emit(f"CMD:{cmd_type}:{cmd.get('data')}")
                     except Exception:
                         pass
-                # basic reset semantics
                 if cmd_type == 'RESET':
                     try:
                         if hasattr(adapter, 'stop'):
@@ -62,12 +125,10 @@ class Manager:
         if dummy:
             adapter = DummyBackendAdapter(name, port)
         else:
-            # Import training_loop lazily to avoid heavy deps at module import time
             from . import training_loop
             env_adapter = None
             if use_gym and env_name:
                 try:
-                    # Lazy import to avoid requiring gym/minerl at module import time
                     from .env_adapter import GymEnvAdapter
                     import gym
                     env = lambda: gym.make(env_name)

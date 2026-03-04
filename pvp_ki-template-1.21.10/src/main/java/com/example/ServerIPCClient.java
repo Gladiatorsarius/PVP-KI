@@ -8,14 +8,15 @@ import java.net.Socket;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Server-side IPC client to send commands to Python training loop on a dedicated command port.
+ * Server-side IPC client for authoritative Protocol v1 event/reset signaling
+ * from the Minecraft server mod to the training side command bridge.
  */
 public class ServerIPCClient {
     private static final int COMMAND_PORT = 9998; // Dedicated command channel (moved from 10001)
     private static final Gson GSON = new Gson();
 
     /**
-     * Send a command to Python via command socket.
+     * Send a server-authoritative event/reset command to the bridge socket.
      */
     public static void sendCommand(String eventType, String details) {
         try (Socket socket = new Socket("127.0.0.1", COMMAND_PORT);

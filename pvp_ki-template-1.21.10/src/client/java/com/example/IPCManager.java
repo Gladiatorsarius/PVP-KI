@@ -48,7 +48,11 @@ public class IPCManager implements Runnable {
 
                         JsonObject actions = gson.fromJson(actionJson, JsonObject.class);
 
-                        // Set pending action for Mixin to apply
+                        if (!PVP_KIClient.ENABLE_LEGACY_CLIENT_IPC) {
+                            continue;
+                        }
+
+                        // Set pending action for Mixin to apply (legacy mode only)
                         PVP_KIClient.pendingAction = actions;
 
                         // Check for reset (handled immediately if possible, or via chat)
@@ -71,6 +75,9 @@ public class IPCManager implements Runnable {
     }
 
     public void sendFrame(byte[] frameBytes, Map<String, Object> state) {
+        if (!PVP_KIClient.ENABLE_LEGACY_CLIENT_IPC) {
+            return;
+        }
         if (currentOut != null) {
             try {
                 // Add Events

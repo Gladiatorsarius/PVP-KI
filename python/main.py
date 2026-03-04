@@ -16,6 +16,20 @@ except Exception:
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
-    window = MainWindow(manager=Manager())
+    manager = Manager()
+    try:
+        manager.start()
+    except Exception:
+        pass
+
+    window = MainWindow(manager=manager)
     window.show()
+
+    def _shutdown_services():
+        try:
+            manager.stop()
+        except Exception:
+            pass
+
+    app.aboutToQuit.connect(_shutdown_services)
     sys.exit(app.exec())

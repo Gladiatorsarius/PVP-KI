@@ -29,6 +29,9 @@ public class ExampleClientMixin {
 	// This ensures AI sees the actual game world, not menus
 	@Inject(at = @At("HEAD"), method = "render")
 	private void onRenderStart(net.minecraft.client.DeltaTracker deltaTracker, boolean bl, CallbackInfo ci) {
+		if (!PVP_KIClient.ENABLE_LEGACY_CLIENT_IPC) {
+			return;
+		}
 		// Capture frame if IPC active OR if test frame requested
 		boolean isTestFrame = PVP_KIClient.testFrameRequested;
 		if ((PVP_KIClient.ipcManager != null && PVP_KIClient.ipcManager.isActive()) || isTestFrame) {
@@ -42,6 +45,9 @@ public class ExampleClientMixin {
 	// Apply actions at TAIL (after rendering) to avoid input conflicts
 	@Inject(at = @At("TAIL"), method = "render")
 	private void onRenderEnd(net.minecraft.client.DeltaTracker deltaTracker, boolean bl, CallbackInfo ci) {
+		if (!PVP_KIClient.ENABLE_LEGACY_CLIENT_IPC) {
+			return;
+		}
 		if (PVP_KIClient.ipcManager != null && PVP_KIClient.ipcManager.isActive()) {
 			applyActions();
 		}

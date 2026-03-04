@@ -1,5 +1,21 @@
 # IPC Test Input Fix - Summary
 
+## 2026 Agent 0 Contract Freeze Notice
+
+This file documents a historical socket fix. For all current implementation work,
+use the canonical Protocol v1 contract in `doc/TRAINING_GUIDE.md` under
+`2026 CONTRACT FREEZE (AGENT 0) - PROTOCOL V1`.
+
+Contract precedence for new work:
+
+1. `doc/TRAINING_GUIDE.md` (Protocol v1)
+2. `doc/full-plan.md` (agent ownership and sequencing)
+3. This file (historical context only)
+
+Legacy assumptions in this summary (single in-process IPC manager references,
+older message prefixes, and old topology) are non-authoritative for new VM
+distributed architecture work.
+
 ## Problem
 When clicking test input buttons in the training GUI, it showed:
 - "Connected!" when the agent first started

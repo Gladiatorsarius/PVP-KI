@@ -4,11 +4,23 @@
 PVP-KI is a hybrid project combining Java and Python components to create an advanced AI agent for Minecraft PvP scenarios. It enables automated player-versus-player actions, reinforcement learning, and agent control, supporting both client and server-side modifications.
 
 ## Features
-- **Minecraft Fabric Mod:** Automates PvP actions, overlays, and team management in-game.
-- **Java Client & Server Modules:** Handle in-game communication, kit management, IPC (inter-process communication), and overlays.
-- **Python Backend:** Provides reinforcement learning, agent training, and control interfaces. Includes backend and frontend modules for agent management and UI.
+- **Main-machine coordinator runtime (Protocol v1):** Central WebSocket coordinator, model/training, and Start-All session control.
+- **VM thin client runtime:** Screen capture (grayscale/JPEG), frame streaming, and action execution via `pydirectinput`.
+- **Server-authoritative event/reset bridge:** Minecraft server-side events and reset signals flow into Python command bridge.
 - **Modular Design:** Easily extendable for new features, kits, and AI strategies.
 - **Documentation:** Training guides, plans, and summaries for AI development and mod integration.
+
+## Protocol v1 Quick Start
+1. Install Python dependencies from [python/requirements.txt](python/requirements.txt).
+2. Start main machine runtime:
+   - `cd python`
+   - `python main.py`
+3. Start each VM runtime client:
+   - `cd python`
+   - `python client.py --server-url ws://<main-host>:8765/ws --agent-id <N> --fps 30`
+4. In the UI, wait for clients to become ready and use **Start All**.
+
+Canonical contract and schemas are documented in [doc/TRAINING_GUIDE.md](doc/TRAINING_GUIDE.md) under `2026 CONTRACT FREEZE (AGENT 0) - PROTOCOL V1`.
 
 ## Java/Python Integration
 The Java mod communicates with the Python backend via IPC, allowing real-time control and training of AI agents. The Python backend can send commands, receive game state, and manage agent behavior, while the Java mod executes actions in Minecraft.

@@ -1,5 +1,31 @@
 Full System Design Plan (Option B)
 
+## 2026 Agent 0 Contract and Interface Freeze
+
+This section defines ownership and handoff boundaries for parallel streams.
+Protocol details are canonical in `doc/TRAINING_GUIDE.md` (Protocol v1).
+
+### Agent ownership
+
+- Agent 0: contract freeze only (schema, ports, lifecycle, acceptance checklist)
+- Agent 1: mod/server event bridge and removal of client-side capture/input responsibility
+- Agent 2: VM runtime (`client.py`) for capture, preprocess, websocket, and input injection
+- Agent 3: main machine coordinator, UI controls, and training-loop integration
+- Agent 4: requirements, documentation integration, and validation/smoke tests
+
+### Required order
+
+1. Agent 0 finishes and publishes Protocol v1
+2. Agents 1/2/3 implement in parallel against frozen interfaces
+3. Agent 4 integrates docs/requirements/tests after 1/2/3 outputs stabilize
+
+### Handoff artifacts required from each stream
+
+- Agent 1 -> event/reset payload examples and endpoint confirmation
+- Agent 2 -> hello/frame/action handling logs and key-release safety proof
+- Agent 3 -> coordinator state transition logs and Start-All behavior proof
+- Agent 4 -> final runbook and dependency matrix aligned with real runtime
+
 Overview
 - Goal: Unified PvP KI system with dynamic agents, client-side teams, server HIT/DEATH event streaming to Python, biome-controlled resets, and live PPO training with a shared model and autosaves.
 - Environments: Works both with and without the server mod. Client-side features (teams, nametags) function on any server; server-enhanced features (events, biome filtering) activate when mod is present.

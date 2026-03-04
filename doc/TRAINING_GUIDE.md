@@ -1,5 +1,190 @@
 # PVP AI TRAINING GUIDE - COMPLETE WALKTHROUGH
 
+## 2026 CONTRACT FREEZE (AGENT 0) - PROTOCOL V1
+
+This section is the canonical interface contract for the distributed architecture.
+All implementation streams (Agent 1-4) must follow this contract.
+
+### A. Scope and authority
+
+- Main machine runs model, trainer, and coordinator.
+- VM nodes run thin clients: capture + preprocess + input injection only.
+- Minecraft server-side mod is the authoritative source for reset/combat events.
+- Client-side Minecraft mod is not required for capture/input in the new flow.
+
+### B. Network endpoints (canonical)
+
+- `WS_COORDINATOR`: `ws://<main-host>:8765/ws`
+- `EVENT_BRIDGE`: `tcp://<main-host>:10001`
+- `HEALTH`: `http://<main-host>:8765/health`
+
+If older docs mention different ports, this table wins.
+
+### C. Session lifecycle state machine
+
+Client session transitions:
+
+1. `connected`
+2. `registered` (after `hello` accepted)
+3. `ready` (after manual ready)
+4. `started` (after global start)
+5. `running`
+6. `ended` (normal stop/reset boundary)
+7. `disconnected`
+
+Invalid transitions are rejected with `error`.
+
+### D. Message catalog (Protocol v1)
+
+Control messages:
+
+- `hello`
+- `ready`
+- `start`
+- `stop`
+- `heartbeat`
+- `disconnect`
+- `error`
+
+Data-plane messages:
+
+- `frame`
+- `action`
+- `event`
+- `reset`
+
+### E. Common required fields
+
+Every `frame`, `action`, `event`, and `reset` message must include:
+
+- `protocol_version` (string, must be `"v1"`)
+- `session_id` (string)
+- `agent_id` (integer >= 1)
+- `episode_id` (string)
+- `timestamp_ms` (integer, epoch ms)
+
+Sequencing fields:
+
+- `frame_id` required on `frame`
+- `action_id` required on `action`
+
+### F. Frame schema (VM -> main)
+
+`frame` payload fields:
+
+- `frame_id` (monotonic per session)
+- `capture_ts_ms`
+- `width`, `height`
+- `channels` (must be `1` for grayscale)
+- `dtype` (e.g. `uint8`)
+- `encoding` (`jpeg` for v1)
+- `payload_b64` (base64 bytes)
+- `dropped_frame_count` (integer)
+
+Target ingest profile:
+
+- 30 FPS capture target per VM
+- Latest-frame preference under load (stale frames may be dropped)
+
+### G. Action schema (main -> VM)
+
+`action` payload fields:
+
+- `action_id` (monotonic per session)
+- `movement` object: `forward`, `back`, `left`, `right`, `jump`, `sprint`, `sneak`, `attack`, `use`
+- `look` object: `dx`, `dy` (relative deltas)
+- `mouse` object: `left_click`, `right_click`, `hold_ms`
+
+Execution mode for v1:
+
+- Asynchronous latest-action semantics
+- VM applies newest received action and may skip older action IDs
+- VM must release all held keys/buttons on `stop` or disconnect
+
+### H. Event/reset schema (server bridge -> main)
+
+`event` payload fields:
+
+- `event_type` in `{HIT, DEATH, ROUND_START, ROUND_END}`
+- `actor_player` (nullable)
+- `target_player` (nullable)
+- `value` (optional numeric)
+- `metadata` (optional object)
+
+`reset` payload fields:
+
+- `reason` (e.g. `manual`, `death`, `timeout`)
+- `next_episode_id`
+- `participants` (array of player names)
+
+### I. Minimal JSON examples
+
+`hello`
+
+```json
+{
+  "type": "hello",
+  "protocol_version": "v1",
+  "agent_id": 2,
+  "client_role": "vm-runtime",
+  "capabilities": { "grayscale": true, "input_driver": "pydirectinput" }
+}
+```
+
+`frame`
+
+```json
+{
+  "type": "frame",
+  "protocol_version": "v1",
+  "session_id": "s-9f2",
+  "agent_id": 2,
+  "episode_id": "ep-104",
+  "frame_id": 1188,
+  "timestamp_ms": 1772520000000,
+  "capture_ts_ms": 1772520000000,
+  "width": 320,
+  "height": 180,
+  "channels": 1,
+  "dtype": "uint8",
+  "encoding": "jpeg",
+  "payload_b64": "...",
+  "dropped_frame_count": 0
+}
+```
+
+`action`
+
+```json
+{
+  "type": "action",
+  "protocol_version": "v1",
+  "session_id": "s-9f2",
+  "agent_id": 2,
+  "episode_id": "ep-104",
+  "action_id": 412,
+  "timestamp_ms": 1772520000100,
+  "movement": { "forward": true, "back": false, "left": false, "right": true, "jump": false, "sprint": true, "sneak": false, "attack": false, "use": false },
+  "look": { "dx": 3.0, "dy": -1.5 },
+  "mouse": { "left_click": false, "right_click": false, "hold_ms": 0 }
+}
+```
+
+### J. Acceptance checklist (contract conformance)
+
+All streams must satisfy:
+
+- No conflicting port declarations outside this section
+- All messages contain required fields for their type
+- Ready + global Start All flow is implemented exactly once in coordinator
+- VM runtime performs full key/button release on stop/disconnect
+- Event bridge payloads match `event`/`reset` schemas
+
+### K. Deprecation note
+
+- MineRL/Gym runtime path is legacy and not the active distributed runtime.
+- Legacy TCP framing variants from old docs remain historical only.
+
 ⚠️ IMPORTANT: This project already has a complete training system implemented!
    You don't need to write Python code - just use the provided files.
 

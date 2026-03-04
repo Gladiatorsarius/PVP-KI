@@ -6,6 +6,9 @@ import numpy as np
 import cv2
 import time
 import threading
+import logging
+
+log = logging.getLogger(__name__)
 try:
     from .ipc_connector import SocketConnector
 except Exception:
@@ -66,9 +69,16 @@ class AgentController:
                         model = self.ppo_trainer.model
                     elif self.shared_model is not None:
                         model = self.shared_model
+                    else:
+                        model = None
 
                     if model is None:
                         # No model available yet; wait a bit
+                        time.sleep(0.1)
+                        continue
+
+                    # Validate state is not None before model inference
+                    if state is None:
                         time.sleep(0.1)
                         continue
 
@@ -78,7 +88,11 @@ class AgentController:
                             inp = state.unsqueeze(0)
                         else:
                             inp = state
-                        move_logits, look_delta, value = model(inp)
+                        try:
+                            move_logits, look_delta, value = model(inp)
+                        except Exception as e:
+                            log.error(f"Model inference failed: {e}")
+                            continue
 
                         # Map to action dict
                         try:

@@ -3,5 +3,8 @@ opencv-python
 torch
 numpy
 Pillow
-minerl
 pytest
+websockets
+mss
+pydirectinput
+PyGetWindow

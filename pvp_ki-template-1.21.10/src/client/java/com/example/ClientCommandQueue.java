@@ -4,8 +4,8 @@ import java.util.LinkedList;
 import java.util.Queue;
 
 /**
- * Client-side queue for IPC commands to be injected into frame headers
- * Commands like START, STOP, RESET are queued here and sent with the next frame to Python
+ * Legacy queue for client-side IPC command headers.
+ * Protocol v1 keeps reset/combat authority server-side and disables this path by default.
  */
 public class ClientCommandQueue {
     private static final Queue<IPCCommand> queue = new LinkedList<>();
@@ -21,6 +21,9 @@ public class ClientCommandQueue {
     }
 
     public static void enqueue(String type, String data) {
+        if (!PVP_KIClient.ENABLE_LEGACY_CLIENT_IPC) {
+            return;
+        }
         synchronized (queue) {
             queue.add(new IPCCommand(type, data));
         }

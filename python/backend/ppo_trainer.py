@@ -91,28 +91,34 @@ class PPOTrainer:
         }
     
     def compute_gae(self, rewards, values, dones, next_value=0):
-        """Compute Generalized Advantage Estimation"""
-        advantages = []
-        gae = 0
-        # Ensure all tensors are on CPU for numpy conversion
-        rewards_np = rewards.detach().cpu().numpy()
-        values_np = values.detach().cpu().numpy()
-        dones_np = dones.detach().cpu().numpy()
-        # Append next_value for last step
-        values_np = np.append(values_np, next_value)
-        # Compute GAE backwards
-        for t in reversed(range(len(rewards_np))):
-            if t == len(rewards_np) - 1:
-                next_non_terminal = 1.0 - dones_np[t]
-                next_value_t = next_value
-            else:
-                next_non_terminal = 1.0 - dones_np[t]
-                next_value_t = values_np[t + 1]
-            delta = rewards_np[t] + self.gamma * next_value_t * next_non_terminal - values_np[t]
-            gae = delta + self.gamma * self.gae_lambda * next_non_terminal * gae
-            advantages.insert(0, gae)
-        advantages = torch.tensor(advantages, dtype=torch.float32)
-        returns = advantages + torch.tensor(values_np[:-1], dtype=torch.float32)
+        """Compute Generalized Advantage Estimation using vectorized PyTorch operations.
+        
+        Avoids CPU/numpy conversions by computing entirely in PyTorch.
+        """
+        # Ensure tensors are on the same device
+        device = rewards.device
+        if not isinstance(values, torch.Tensor):
+            values = torch.tensor(values, device=device, dtype=torch.float32)
+        if not isinstance(dones, torch.Tensor):
+            dones = torch.tensor(dones, device=device, dtype=torch.float32)
+        
+        # Stack next value for all timesteps
+        values_with_next = torch.cat([values, torch.tensor([next_value], device=device)])
+        
+        # Compute advantages using parallel computation
+        # delta_t = r_t + gamma * V(s_{t+1}) * (1 - done_t) - V(s_t)
+        deltas = rewards + self.gamma * values_with_next[1:] * (1 - dones) - values
+        
+        # Compute cumulative advantages using torch operations
+        advantages = torch.zeros_like(rewards, device=device)
+        gae = torch.tensor(0.0, device=device)
+        
+        # Use reversed iteration with tensor operations
+        for t in reversed(range(len(rewards))):
+            gae = deltas[t] + self.gamma * self.gae_lambda * (1 - dones[t]) * gae
+            advantages[t] = gae
+        
+        returns = advantages + values
         return advantages, returns
     
     def update(self):
@@ -231,12 +237,16 @@ class PPOTrainer:
     
     def load_checkpoint(self, filename):
         """Load model checkpoint"""
-        checkpoint = torch.load(filename)
-        self.model.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.fight_count = checkpoint.get('fight_count', 0)
-        self.update_count = checkpoint.get('update_count', 0)
-        print(f"Loaded checkpoint: {filename} (Fight {self.fight_count}, Update {self.update_count})")
+        try:
+            # Use weights_only=True to prevent arbitrary code execution from malicious checkpoint files
+            checkpoint = torch.load(filename, weights_only=True)
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            self.fight_count = checkpoint.get('fight_count', 0)
+            self.update_count = checkpoint.get('update_count', 0)
+            print(f"Loaded checkpoint: {filename} (Fight {self.fight_count}, Update {self.update_count})")
+        except Exception as e:
+            raise RuntimeError(f"Failed to load checkpoint {filename}: {str(e)}") from e
     
     def get_metrics_summary(self):
         """Get summary of recent training metrics"""

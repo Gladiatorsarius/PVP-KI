@@ -1,5 +1,20 @@
 ## PROMPT START: MINECRAFT PVP KI (1.21.10 - LAN-SETUP)
 
+## 2026 EXECUTION SPLIT (AGENT 0 FREEZE)
+
+Canonical protocol and interface contract:
+- See `doc/TRAINING_GUIDE.md` section `2026 CONTRACT FREEZE (AGENT 0) - PROTOCOL V1`.
+
+Execution streams:
+- Agent 0: contract freeze only (done first, blocks all other streams)
+- Agent 1: mod/server responsibilities only, remove client-side capture/input duties
+- Agent 2: VM `client.py` runtime for frame capture + websocket + pydirectinput
+- Agent 3: main-machine coordinator + training loop integration + UI Start-All flow
+- Agent 4: final docs/requirements/test integration after 1-3 complete
+
+Completion rule:
+- Any behavior conflicting with Protocol v1 is invalid and must be updated.
+
 # 🎯 ZIEL: Training einer KI durch permanentes 1-gegen-1 Self-Play in einer lokalen, zu 100% offline-fähigen Umgebung.
 
 # ///////////////////////////////////////////////////////////////////////////////
