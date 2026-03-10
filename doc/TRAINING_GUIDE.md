@@ -15,7 +15,7 @@ All implementation streams (Agent 1-4) must follow this contract.
 ### B. Network endpoints (canonical)
 
 - `WS_COORDINATOR`: `ws://<main-host>:8765/ws`
-- `EVENT_BRIDGE`: `tcp://<main-host>:10001`
+- `EVENT_BRIDGE`: `tcp://<main-host>:9998`
 - `HEALTH`: `http://<main-host>:8765/health`
 
 If older docs mention different ports, this table wins.
@@ -185,545 +185,553 @@ All streams must satisfy:
 - MineRL/Gym runtime path is legacy and not the active distributed runtime.
 - Legacy TCP framing variants from old docs remain historical only.
 
-⚠️ IMPORTANT: This project already has a complete training system implemented!
-   You don't need to write Python code - just use the provided files.
-
-TABLE OF CONTENTS:
-1. System Architecture Overview
-2. Port Configuration  
-3. Training Workflow Step-by-Step
-4. Understanding the Python Code (Already Implemented!)
-5. Reward System Configuration (GUI-Based)
-6. Event Handling
-7. Multi-Agent Training
-8. Troubleshooting
-
-================================================================================
-1. SYSTEM ARCHITECTURE OVERVIEW
-================================================================================
-
-The system consists of 3 main components:
-
-┌─────────────────┐        ┌──────────────────┐        ┌─────────────────┐
-│  Minecraft Mod  │───────▶│  IPC (Sockets)   │───────▶│  Python AI      │
-│  (Client-Side)  │◀───────│  Frame + Events  │◀───────│  training_loop  │
-└─────────────────┘        └──────────────────┘        └─────────────────┘
-      │                           │                            │
-      │ Captures:                 │ Sends:                     │ Processes:
-      │ - Screen frames           │ - RGB frames               │ - Observations
-      │ - Player state            │ - Game state               │ - Actions
-      │ - Hit/Death events        │ - Events                   │ - Rewards
-      │                           │ - Commands                 │ - Training
-
-
-HOW IT WORKS:
--------------
-1. Minecraft client captures game state every frame (60 FPS)
-2. Mod sends frame data + events to Python via TCP sockets
-3. Python AI receives data, calculates reward, decides action
-4. Python sends action back to mod (move, attack, etc.)
-5. Mod executes action in-game
-6. Repeat → AI learns over time!
-
-
-================================================================================
-2. PORT CONFIGURATION
-================================================================================
-
-PORT LAYOUT:
-------------
-Port 9998:  Command Channel (START/STOP/RESET commands)
-Port 9999:  Agent 1 - Frame data stream
-Port 10001: Agent 2 - Frame data stream
-Port 10002: Agent 3 - Frame data stream
-Port 10003: Agent 4 - Frame data stream
-... (and so on for more agents)
-
-
-IMPORTANT:
-----------
-- Each Minecraft client connects to ONE port (one agent)
-- Python training_loop.py must listen on ALL agent ports simultaneously
-- Command port (9998) is shared across all agents
-
-
-================================================================================
-3. TRAINING WORKFLOW STEP-BY-STEP
-================================================================================
-
-STEP 1: START PYTHON GUI
--------------------------
-1. Open terminal in the "PVP KI" folder
-2. Make sure you have dependencies installed:
-   pip install torch numpy tkinter
-3. Run: python training_loop.py
-4. A GUI window will open titled "Multi-Agent PVP Training"
-5. You'll see 2 agent panels by default (Agent 1 and Agent 2)
-
-
-STEP 2: CONFIGURE REWARDS (IN THE GUI)
----------------------------------------
-Each agent panel has reward sliders:
-  - Win: +500.0 (default)
-  - Loss: -500.0 (default)
-  - Dmg Dealt: +10.0 (default)
-  - Dmg Taken: -10.0 (default)
-  - Time: -0.1 (default - penalty per frame)
-  - Team Hit: -50.0 (default)
-  - Team Kill: -500.0 (default)
-
-You can adjust these values BEFORE starting training!
-Use "Apply to All" button to copy settings to all agents.
-
-
-STEP 3: START MINECRAFT CLIENT(S)
-----------------------------------
-1. Launch Minecraft with the mod installed
-2. Join a server (or singleplayer)
-3. Mod automatically connects to port 9999 (Agent 1)
-
-
-STEP 4: START TRAINING (CLICK IN GUI)
---------------------------------------
-1. In the GUI, click the "Start" button for Agent 1
-2. The agent panel will show "Status: Running"
-3. When Minecraft connects, you'll see "Connected!" in the agent log
-4. Training starts automatically - no /ki start command needed!
-
-
-STEP 5: MONITOR TRAINING (IN THE GUI)
---------------------------------------
-Each agent panel shows:
-  - Status: Running/Stopped/Stopping
-  - Current Reward (resets on death)
-  - Event log (shows hits, deaths, wins, losses)
-  
-Bottom panel shows:
-  - Total fights completed
-  - PPO updates performed  
-  - Average policy/value loss
-  - Entropy (exploration metric)
-
-In Minecraft:
-  /testframe  → Check IPC connection status
-  /name       → Toggle nametag overlays
-
-
-STEP 6: MULTI-AGENT TRAINING (2v2 or more)
--------------------------------------------
-For self-play training with 2 agents:
-
-1. In GUI, both Agent 1 and Agent 2 panels are already created
-2. Click "Start" on both agents
-3. Launch first Minecraft client → Auto-connects to Agent 1 (port 9999)
-4. Launch second Minecraft client → Auto-connects to Agent 2 (port 10001)
-5. Both agents train against each other!
-
-To add more agents:
-  - Click "+ Add Agent" in the GUI
-  - Launch more Minecraft clients
-  - Each client auto-connects to the next available port
-
-
-STEP 7: SAVING THE MODEL
--------------------------
-The model auto-saves after every fight ends (on death)!
-Manual save: Click "Save Model" button in GUI
-
-Checkpoints are saved to: checkpoints/pvp_model_YYYYMMDD_HHMMSS.pth
-
-
-================================================================================
-4. UNDERSTANDING THE PYTHON CODE (Already Implemented!)
-================================================================================
-
-YOU DON'T NEED TO WRITE CODE! The system is already complete.
-
-FILES PROVIDED:
----------------
-1. training_loop.py    - Main GUI and agent coordination
-2. model.py            - Neural network (CNN + Actor-Critic)
-3. ppo_trainer.py      - PPO algorithm implementation
-4. ipc_client.py       - Socket communication utilities
-5. drl_agent.py        - Additional agent utilities
-
-HOW IT WORKS:
--------------
-A) training_loop.py creates a GUI with:
-   - Agent panels for each Minecraft client
-   - Reward configuration sliders
-   - Real-time status and metrics display
-   - Start/Stop controls for each agent
-
-B) Each agent connects to Minecraft via TCP socket:
-   - Minecraft MOD → connects to → Python on ports 9999, 10001, etc.
-   - Python receives: Frame data + Events + Game state
-   - Python sends: Actions (movement, attack, look direction)
-
-C) Neural Network (model.py):
-   - Input: 64x64 RGB game frames
-   - CNN extracts visual features
-   - Actor outputs: Movement (W/A/S/D/Space/Attack) + Look (Yaw/Pitch)
-   - Critic outputs: State value (for PPO training)
-
-D) PPO Training (ppo_trainer.py):
-   - Collects experiences in a shared buffer
-   - Computes advantages using GAE (Generalized Advantage Estimation)
-   - Updates policy with clipped objective
-   - Auto-saves checkpoints after each fight
-
-E) Reward Calculation:
-   - Configured via GUI sliders (see Step 2 above)
-   - Applied automatically based on events from Minecraft
-   - Example: Hit enemy → +10.0, Got hit → -10.0, Win → +500.0
-   - Per-Damage Relation-Based Rewards (NEW):
-     * Enemy Hit/♥: reward per 0.5 heart dealt to enemies (default: +5.0)
-     * Neutral Hit/♥: penalty per 0.5 heart dealt to neutrals (default: -10.0)
-     * Team Hit/♥: penalty per 0.5 heart dealt to teammates (default: -25.0)
-   - Encourages precise targeting and discourages friendly fire
-   - Fine-tune per half-heart to train agents on damage optimization
-
-THE SYSTEM IS FULLY AUTOMATED!
--------------------------------
-Once you:
-1. Start the GUI (python training_loop.py)
-2. Click "Start" on an agent
-3. Launch Minecraft
-
-Everything else happens automatically:
-  ✅ Frame capture and sending
-  ✅ Event detection (hits, deaths)
-  ✅ Reward calculation
-  ✅ Neural network inference
-  ✅ Action execution in-game
-  ✅ PPO training updates
-  ✅ Model checkpointing
-
-
-================================================================================
-5. REWARD SYSTEM CONFIGURATION (GUI-Based - No Code Needed!)
-================================================================================
-
-REWARD CONFIGURATION IN THE GUI:
----------------------------------
-Each agent panel has 7 reward sliders you can adjust IN REAL-TIME:
-
-1. WIN REWARD (+500.0 default)
-   - Given when the agent wins a fight (enemy dies, agent survives)
-   - Higher = More motivation to win
-   - Resets agent's cumulative reward to 0 after win
-
-2. LOSS PENALTY (-500.0 default)  
-   - Given when the agent loses (agent dies)
-   - More negative = More punishment for dying
-   - Resets agent's cumulative reward to 0 after loss
-
-3. DAMAGE DEALT (+10.0 default)
-   - Given for each hit the agent lands on enemy
-   - Detected via EVENT:HIT events from mod
-   - Encourages aggressive play
-
-4. DAMAGE TAKEN (-10.0 default)
-   - Given when agent loses health
-   - Calculated from health delta in frame header
-   - Encourages defensive play and dodging
-
-5. TIME PENALTY (-0.1 default)
-   - Applied EVERY FRAME
-   - Encourages fast, decisive combat
-   - Prevents passive/camping strategies
-   - Total penalty = -0.1 × frames_per_fight
-
-6. TEAM HIT PENALTY (-50.0 default)
-   - Given when agent hits a teammate
-   - Only applies in team modes
-   - Discourages friendly fire
-
-7. TEAM KILL PENALTY (-500.0 default)
-   - Given when agent kills a teammate
-   - Severe punishment for team kills
-   - Only applies in team modes
-
-
-HOW TO ADJUST REWARDS:
------------------------
-1. Type new values in the text boxes next to each reward
-2. Press Enter to apply
-3. Changes take effect IMMEDIATELY (even during active training!)
-4. Use "Apply to All" button to copy settings to all agents
-
-
-RECOMMENDED CONFIGURATIONS:
----------------------------
-
-AGGRESSIVE FIGHTER:
-  Win: +500, Loss: -300, Dmg Dealt: +20, Dmg Taken: -5, Time: -0.2
-
-DEFENSIVE FIGHTER:
-  Win: +800, Loss: -100, Dmg Dealt: +5, Dmg Taken: -30, Time: -0.05
-
-BALANCED:
-  Win: +500, Loss: -500, Dmg Dealt: +10, Dmg Taken: -10, Time: -0.1
-
-SPEEDRUNNER (Fast kills):
-  Win: +1000, Loss: -200, Dmg Dealt: +15, Dmg Taken: -5, Time: -1.0
-
-
-HOW REWARDS ARE CALCULATED:
-----------------------------
-The training_loop.py automatically:
-
-1. Monitors health changes → applies Damage Taken penalty
-2. Detects EVENT:HIT events → applies Damage Dealt reward
-3. Detects EVENT:DEATH events → applies Win/Loss rewards
-4. Applies Time Penalty every frame
-5. Accumulates total reward and displays in GUI
-6. Resets to 0 after each fight ends
-
-
-================================================================================
-6. EVENT HANDLING
-================================================================================
-
-EVENTS SENT FROM MOD TO PYTHON:
---------------------------------
-
-1. EVENT:HIT:attacker:target
-   - Triggered when attacker hits target
-   - Works on any server (client-side detection)
-   - Example: "EVENT:HIT:Player1:Player2"
-
-2. EVENT:DEATH:victim:killer
-   - Triggered when victim dies
-   - killer = player name OR "Environment"
-   - Works on any server (chat message parsing)
-   - Example: "EVENT:DEATH:Player2:Player1"
-   - Example: "EVENT:DEATH:Player1:Environment"
-
-
-FRAME HEADER FORMAT:
---------------------
-{
-  "events": ["EVENT:HIT:...", "EVENT:DEATH:..."],
-  "player_name": "YourPlayerName",
-  "agent_id": 1,
-  "health": 20.0,
-  "position": {"x": 100, "y": 64, "z": 200},
-  "yaw": 90.0,
-  "pitch": 0.0,
-  "bodyLength": 691200,  // Frame size in bytes
-  "cmd_type": "START",   // Optional command
-  "cmd_data": "..."      // Optional command data
-}
-
-
-================================================================================
-7. MULTI-AGENT TRAINING (Self-Play)
-================================================================================
-
-WHAT IS SELF-PLAY?
-------------------
-Training multiple copies of the same agent against each other.
-All agents share the SAME neural network weights.
-This creates a "curriculum" where agents continuously adapt to their own strategies.
-
-BENEFITS:
-- Agents never plateau - always facing equally skilled opponents
-- Discovers creative strategies and counter-strategies
-- Much faster than training against fixed opponents
-- No need for human players!
-
-
-SETUP FOR 2-AGENT SELF-PLAY:
------------------------------
-1. Start training_loop.py GUI
-2. You'll see Agent 1 and Agent 2 panels (already created by default)
-3. Click "Start" on BOTH agents
-4. Launch Minecraft client 1 → Auto-connects to port 9999 (Agent 1)
-5. Launch Minecraft client 2 → Auto-connects to port 10001 (Agent 2)
-6. Put them in the same Minecraft world
-7. Let them fight!
-
-IMPORTANT:
-- Both agents share the same model (controlled by shared_model flag)
-- Each fight improves BOTH agents simultaneously
-- Model auto-saves after every fight ends
-
-
-ADDING MORE AGENTS (3+ Players):
----------------------------------
-1. In GUI, click "+ Add Agent" button
-2. Agent 3 appears on port 10002
-3. Launch Minecraft client 3 → Auto-connects to 10002
-4. Repeat for Agent 4, 5, etc.
-
-TEAM VS TEAM (2v2, 3v3):
-------------------------
-1. Create 4 agents in GUI
-2. Launch 4 Minecraft clients
-3. In Minecraft, use team commands:
-   /team create red
-   /team create blue
-   /team add red Agent1Name
-   /team add red Agent2Name
-   /team add blue Agent3Name
-   /team add blue Agent4Name
-4. Agents will avoid hitting teammates (Team Hit/Kill penalties apply)
-
-
-PORT ALLOCATION:
-----------------
-Agent 1: Port 9999
-Agent 2: Port 10001 (skips 10000)
-Agent 3: Port 10002
-Agent 4: Port 10003
-... and so on
-
-Each Minecraft client auto-connects to the next available port.
-
-
-================================================================================
-8. TROUBLESHOOTING
-================================================================================
-
-PROBLEM: "IPC not active - Python not connected"
-SOLUTION:
-  - Make sure training_loop.py is running FIRST
-  - Check Python is listening on the correct port
-  - Verify firewall isn't blocking connections
-  - Use /testframe command to check status
-
-PROBLEM: "Frames not being sent"
-SOLUTION:
-  - Check console output for "[IPC Port 9999] Frame sent"
-  - Verify Python is reading frames correctly
-  - Check socket connection isn't timing out
-
-PROBLEM: "Events not detected"
-SOLUTION:
-  - Hit events: Check AttackEntityCallback is registered
-  - Death events: Check chat messages are being parsed
-  - Use /testframe to verify IPC is active
-
-PROBLEM: "Port 10001 gets skipped"
-SOLUTION:
-  - Already fixed! Command port moved to 9998
-  - Agent 1 = 9999, Agent 2 = 10001, Agent 3 = 10002
-
-PROBLEM: "Nametags not rendering"
-SOLUTION:
-  - Create team: /team create myteam
-  - Add player: /team add myteam PlayerName
-  - Teams are now synced to clients automatically!
-  - Toggle nametags: /name
-
-PROBLEM: "Rewards not tracking"
-SOLUTION:
-  - Make sure /ki start was called
-  - Check Python is processing events correctly
-  - Verify event format matches expected pattern
-  - Check cumulative_reward is being updated
-
-
-================================================================================
-QUICK REFERENCE - COMMANDS
-================================================================================
-
-CLIENT-SIDE COMMANDS (work on any server):
-  /ki start          → Start reward tracking
-  /ki stop           → Stop reward tracking
-  /ki reset          → Reset rewards (no teleport)
-  /testframe         → Check IPC connection status
-  /name              → Toggle nametag overlays
-  /agent <id>        → Switch to agent ID (changes port)
-  /kit create <name> → Save current inventory as kit
-  /kit load <name>   → Load kit
-  /kit list          → List all kits
-  /kit sync          → Sync client kits to server
-
-SERVER-SIDE COMMANDS (require mod on server):
-  /ki start          → Start tracking (sends to port 9998)
-  /ki stop           → Stop tracking
-  /ki reset <p1> <p2> <kit> [shuffle] → Reset players with kit
-  /team create <name>      → Create team
-  /team add <team> <player> → Add player to team
-  /team remove team <name>  → Remove team
-  /team remove player <name> → Remove player from team
-  /team list         → List all teams
-  /team clear        → Clear all teams
-
-
-================================================================================
-IMPORTANT NOTES
-================================================================================
-
-✅ THE SYSTEM IS COMPLETE - NO CODING REQUIRED!
-------------------------------------------------
-Everything is already implemented:
-  - Neural network model (CNN + Actor-Critic)
-  - PPO training algorithm
-  - Experience replay buffer
-  - GUI for monitoring and configuration
-  - Auto-save checkpoints
-  - Multi-agent support
-
-All you need to do:
-  1. Run: python training_loop.py
-  2. Click "Start" in GUI
-  3. Launch Minecraft
-  4. Watch it train!
-
-
-✅ REWARD TUNING IS KEY
------------------------
-The default rewards work well, but experiment with:
-  - Higher win rewards for more aggressive play
-  - Higher time penalties for faster fights
-  - Lower damage taken penalties if agent is too passive
-
-
-✅ TRAINING TAKES TIME
-----------------------
-- Expect 100-1000 fights before agent shows skill
-- Early fights will be random/chaotic
-- Gradually agent learns to aim, dodge, combo attacks
-- Save checkpoints frequently!
-
-
-✅ WORKS ON ANY SERVER
-----------------------
-- Client-side only - no server mod needed
-- Hit detection works via client
-- Death detection via chat parsing
-- Train on vanilla servers, PvP servers, anywhere!
-
-
-✅ MODEL SAVES AUTOMATICALLY
-----------------------------
-- Auto-saves after every fight (on death)
-- Manual save: Click "Save Model" button
-- Checkpoints saved to: checkpoints/pvp_model_YYYYMMDD_HHMMSS.pth
-- Load previous checkpoint by modifying training_loop.py
-
-
-✅ MONITOR METRICS
-------------------
-Bottom panel shows real-time training metrics:
-  - Fights: Total fights completed
-  - Updates: PPO optimization steps
-  - Policy Loss: How well agent follows policy
-  - Value Loss: How accurate value predictions are
-  - Entropy: How much exploration is happening
-
-
-✅ TROUBLESHOOTING TIPS
------------------------
-- If reward stays at 0: Check agent is hitting/being hit
-- If agent doesn't move: Check action sending (2 bytes + JSON)
-- If model doesn't learn: Try increasing batch_size or epochs in ppo_trainer.py
-- If training is slow: Lower frame resolution in FrameCaptureMixin
-
-
-Good luck with your training! 🚀
-The agent will surprise you with emergent strategies!
-================================================================================
+---
+
+## TRAINING METHODOLOGY
+
+This section describes the Deep Reinforcement Learning (DRL) training phases and reward schema evolution for developing PvP combat agents from basic skills to advanced strategies.
+
+### Phase 1: Bootstrapping (Initial Learning)
+
+**Purpose**: Teach the untrained agent fundamental game mechanics (movement, attacking, aiming) as quickly as possible through training against a human opponent.
+
+**Goals**:
+- Acquire basic skills (attacking, dodging)
+- Establish stable behavior before exposing the agent to complex self-play strategies
+
+**Reward Schema (Active During Bootstrapping)**
+
+| Component | Reward Value | Purpose |
+|-----------|--------------|---------|
+| Terminal Victory | **+500 points (Moderate)** | Establishes victory as the main goal without creating excessive risk aversion |
+| Terminal Defeat | **-500 points (Moderate)** | Minimizes punishment so the agent is willing to take risky actions to learn |
+| Continuous HP Delta (Enemy loses HP) | **+10 points per 0.5 heart** | Dense positive feedback for successful hits |
+| Continuous HP Delta (Agent loses HP) | **-10 points per 0.5 heart** | Dense negative feedback promoting survival and dodging |
+| Time Penalty | **0 (Removed)** | Inefficiency punishment is handled by the human opponent who defeats hesitant agents |
+
+**Key Insight**: Moderate terminal rewards during bootstrapping encourage exploration and risk-taking, which is essential for learning basic combat mechanics.
+
+### Phase 2: Self-Play (Advanced Strategy Development)
+
+**Purpose**: After the agent masters the basics, switch to self-play (agent vs agent) training. Sharpen the reward schema and penalties to enforce highly optimized and efficient behaviors.
+
+**Goals**:
+- Develop complex strategies (e.g., optimal timing, block usage, positioning)
+- Maximize efficiency and aggression
+
+**Reward Schema (Active During Self-Play)**
+
+| Component | Reward Value | Purpose |
+|-----------|--------------|---------|
+| Terminal Victory | **+1000 points (High)** | Maximally prioritizes victory as the only true objective |
+| Terminal Defeat | **-1000 points (High)** | Strong penalty to eliminate poor overall strategies |
+| Continuous HP Delta (Enemy loses HP) | **+10 points per 0.5 heart** | Remains the primary source of dense feedback |
+| Continuous HP Delta (Agent loses HP) | **-10 points per 0.5 heart** | Remains the primary source of dense feedback |
+| Time Penalty | **-1 point per frame (Added)** | Punishes slow/inefficient play, forcing aggressive optimization |
+
+**Key Insight**: High terminal rewards during self-play create strong selection pressure for winning strategies, while the time penalty prevents passive play and encourages decisive action.
+
+### Training Progression
+
+1. **Start with Bootstrapping**: Train against human opponents until the agent demonstrates consistent basic combat behavior (can hit, dodge, survive reasonable duration)
+
+2. **Transition to Self-Play**: Once bootstrapping is complete, switch to agent-vs-agent training with the intensified reward schema
+
+3. **Monitor for Overfitting**: Watch for degenerate strategies (e.g., excessive blocking, running away). Adjust rewards or introduce curriculum variations if needed
+
+4. **Iterate**: Continue self-play training for convergence, periodically validating against human opponents to ensure strategies generalize
+
+## PROTOCOL V1 TRAINING WALKTHROUGH
+
+### System Architecture Overview
+
+The Protocol v1 distributed architecture separates concerns across three components:
+
+```
+┌─────────────────────────────────────────────┐
+│           MAIN MACHINE                      │
+│  ┌──────────────────────────────────────┐  │
+│  │ Coordinator (WebSocket :8765)        │  │
+│  │ - Session management                 │  │
+│  │ - Frame routing                      │  │
+│  │ - Action distribution                │  │
+│  └──────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────┐  │
+│  │ Model + PPO Trainer                  │  │
+│  │ - CNN Actor-Critic                   │  │
+│  │ - Experience buffer                  │  │
+│  │ - Gradient updates                   │  │
+│  └──────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────┐  │
+│  │ Command Bridge (TCP :9998)           │  │
+│  │ - Receives server events             │  │
+│  │ - HMAC-SHA256 auth                   │  │
+│  └──────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────┐  │
+│  │ PyQt6 UI                             │  │
+│  │ - Agent panels                       │  │
+│  │ - Start/Stop controls                │  │
+│  │ - Real-time metrics                  │  │
+│  └──────────────────────────────────────┘  │
+└─────────────────────────────────────────────┘
+                    ↕ WebSocket
+┌─────────────────────────────────────────────┐
+│           VM MACHINES (1 per agent)         │
+│  ┌──────────────────────────────────────┐  │
+│  │ Runtime Client (client.py)           │  │
+│  │ - Screen capture (mss)               │  │
+│  │ - Grayscale + JPEG preprocessing     │  │
+│  │ - Action execution (pydirectinput)   │  │
+│  │ - WebSocket client                   │  │
+│  └──────────────────────────────────────┘  │
+│  ┌──────────────────────────────────────┐  │
+│  │ Minecraft Client                     │  │
+│  │ - Renders game                       │  │
+│  │ - Receives input from runtime        │  │
+│  └──────────────────────────────────────┘  │
+└─────────────────────────────────────────────┘
+                    ↕ TCP
+┌─────────────────────────────────────────────┐
+│           MINECRAFT SERVER                  │
+│  - Server-side mod                          │
+│  - Authoritative events: HIT, DEATH, RESET  │
+│  - Sends to command bridge :9998            │
+└─────────────────────────────────────────────┘
+```
+
+**Key Design Principles**:
+- **Separation of concerns**: Main machine handles AI computation, VMs handle I/O
+- **Server-authoritative events**: Combat events come from server, not client
+- **Thin VM clients**: Minimal processing on VM, keeps latency low
+- **WebSocket coordinator**: Single connection point for all agents
+
+---
+
+### Quick Start Guide
+
+#### Prerequisites
+
+1. **Python 3.10+** with pip installed
+2. **CUDA-compatible GPU** (optional but recommended for training)
+3. **Minecraft 1.21.11** with Fabric Loader
+4. **Network access** between main machine and VMs (if distributed)
+
+#### Installation
+
+1. **Install Python dependencies** on main machine:
+   ```bash
+   cd python/server
+   pip install -r requirements.txt
+   ```
+
+2. **Install Python dependencies** on each VM:
+   ```bash
+   cd python/client
+   pip install -r requirements.txt
+   ```
+
+3. **Build and install the Fabric mod**:
+   ```bash
+   cd pvp_ki-template-1.21.10
+   ./gradlew build
+   # Copy build/libs/*.jar to Minecraft mods folder
+   ```
+
+4. **Configure the server-side mod**:
+   - Install mod on Minecraft server
+   - Set command bridge endpoint in mod config (default: localhost:9998)
+   - (Optional) Configure HMAC authentication via `PVP_CMD_SECRET` environment variable for production
+     - Note: Current server mod implementation doesn't send HMAC tokens, so authentication is typically disabled for development
+
+---
+
+### Step-by-Step Training Workflow
+
+#### Step 1: Start Main Machine Runtime
+
+On the main machine (where AI computation happens):
+
+```bash
+cd python/server
+python main.py
+```
+
+**What this does**:
+- Starts WebSocket coordinator on port 8765
+- Starts command bridge listener on port 9998
+- Initializes PPO trainer and model (CPU/CUDA/MPS auto-detected)
+- Opens PyQt6 UI for agent management
+
+**Expected output**:
+```
+[INFO] Device: cuda (NVIDIA GeForce RTX 3080)
+[INFO] Coordinator listening on ws://0.0.0.0:8765/ws
+[INFO] Command bridge listening on tcp://0.0.0.0:9998
+[INFO] UI started
+```
+
+#### Step 2: Start VM Runtime Clients
+
+On each VM machine (one per agent):
+
+```bash
+cd python/client
+python client.py --server-url ws://<main-machine-ip>:8765/ws --agent-id 1 --fps 30
+```
+
+**Parameters**:
+- `--server-url`: WebSocket coordinator endpoint (default: ws://127.0.0.1:8765/ws)
+- `--agent-id`: Unique agent identifier (1, 2, 3, ...)
+- `--fps`: Frame capture rate (default: 30)
+- `--jpeg-quality`: JPEG compression quality 1-100 (default: 70)
+- `--width`: Frame resize width in pixels (default: 320)
+- `--height`: Frame resize height in pixels (default: 180)
+- `--window-title-contains`: Preferred window title substring for capture (default: "VirtualBox")
+
+**What this does**:
+- Connects to main machine coordinator via WebSocket
+- Begins screen capture at specified FPS
+- Preprocesses frames (grayscale conversion, JPEG encoding)
+- Streams frames to coordinator
+- Waits for action commands
+
+**Expected output**:
+```
+[INFO] Connecting to ws://192.168.1.100:8765/ws as agent_1
+[INFO] Connected! Session state: registered
+[INFO] Capture initialized: 1920x1080 @ 30fps
+[INFO] Ready to start
+```
+
+#### Step 3: Configure Agents in UI
+
+In the PyQt6 UI on the main machine:
+
+1. **Agent panels** will appear as VM clients connect
+2. **Wait for "Ready" status** on all agents
+3. **Click "Start All"** to begin coordinated training session
+
+**Agent Panel UI Elements**:
+- **Status indicator**: Connected → Registered → Ready → Running
+- **Metrics display**: Current reward, episode length, last action
+- **Control buttons**: Start, Stop, Reset
+- **Reward configuration**: Win/Loss rewards, HP delta rewards
+
+#### Step 4: Launch Minecraft Clients
+
+On each VM machine:
+
+1. Launch Minecraft with the client mod installed
+2. Join your Minecraft server (where server-side mod is running)
+3. The runtime client will automatically detect the game window and begin capture
+
+**No in-game commands needed!** The VM runtime handles everything automatically.
+
+#### Step 5: Start Training Session
+
+In the UI, click **"Start All"** to begin training:
+
+1. Coordinator broadcasts `start` message to all VM clients
+2. VM clients begin sending frames at configured FPS
+3. Main machine:
+   - Receives frames from all agents
+   - Runs model inference (batched for efficiency)
+   - Sends actions back to each agent
+   - Accumulates experiences in PPO buffer
+4. VM clients:
+   - Receive actions from coordinator
+   - Execute actions via pydirectinput (keyboard/mouse simulation)
+   - Continue frame capture loop
+
+**Server mod sends events**:
+- `HIT` events when player hits enemy
+- `DEATH` events when player dies
+- `RESET` signals to start new episode
+
+**Training updates**:
+- PPO updates run automatically when buffer fills
+- Model checkpoints saved after each episode
+- Metrics displayed in UI (policy loss, value loss, entropy)
+
+#### Step 6: Monitor Training Progress
+
+**UI Metrics** (real-time):
+- **Episode Reward**: Cumulative reward for current episode
+- **Win Rate**: Percentage of episodes won (last 100)
+- **Average Episode Length**: Mean frames per episode
+- **PPO Stats**: Policy loss, value loss, entropy, KL divergence
+
+**Checkpoint Files** (saved to `checkpoints/`):
+- Format: `model_YYYY-MM-DD_HH-MM_fight_N.pt`
+- Contains: Model weights, optimizer state, training config
+- Auto-saved after each episode completion
+
+**Logs** (`python/logs/`):
+- Coordinator logs: Session events, errors
+- Training logs: Reward curves, loss curves
+- Event logs: Combat events from server
+
+#### Step 7: Stop Training
+
+To stop gracefully:
+
+1. **In UI**: Click "Stop All"
+2. **Coordinator**: Broadcasts `stop` message to all agents
+3. **VM clients**: Complete current frame, release inputs, disconnect
+4. **Main machine**: Saves final checkpoint, closes sessions
+
+To resume later:
+
+1. Restart `main.py` (will load latest checkpoint automatically)
+2. Restart VM clients
+3. Click "Start All" in UI
+
+---
+
+### Multi-Agent Training (Self-Play)
+
+For agent-vs-agent self-play:
+
+1. **Start 2+ VM clients** with different agent IDs:
+   ```bash
+   # VM 1
+   cd python/client
+   python client.py --agent-id 1 --fps 30
+   
+   # VM 2
+   cd python/client
+   python client.py --agent-id 2 --fps 30
+   ```
+
+2. **Launch Minecraft on each VM** and join the same server
+
+3. **In UI**: All agent panels appear, click "Start All"
+
+4. **Server mod**: Manages team assignments, combat events for all players
+
+**Self-Play Benefits**:
+- Agents learn to counter each other's strategies
+- Emergent complexity from co-evolution
+- No human opponent needed after bootstrapping
+
+---
+
+### Reward Configuration
+
+Rewards are configured in the UI and applied automatically based on server events.
+
+**Default Reward Schema** (Bootstrapping Phase):
+
+| Event | Reward | Notes |
+|-------|--------|-------|
+| Victory | +500 | Agent wins fight |
+| Defeat | -500 | Agent dies |
+| HP Loss (Agent) | -10 per 0.5 heart | Encourages survival |
+| HP Loss (Enemy) | +10 per 0.5 heart | Encourages aggression |
+| Time Penalty | 0 | No time penalty during bootstrapping |
+
+**Self-Play Reward Schema**:
+
+| Event | Reward | Notes |
+|-------|--------|-------|
+| Victory | +1000 | Higher stakes |
+| Defeat | -1000 | Higher stakes |
+| HP Loss (Agent) | -10 per 0.5 heart | Same as bootstrapping |
+| HP Loss (Enemy) | +10 per 0.5 heart | Same as bootstrapping |
+| Time Penalty | -1 per frame | Punishes slow play |
+
+**To modify rewards**:
+1. Edit values in agent panel UI
+2. Click "Apply" or "Apply to All"
+3. Changes take effect immediately (even during training)
+
+---
+
+### Troubleshooting
+
+#### VM Client Won't Connect
+
+**Symptom**: "Connection refused" or timeout errors
+
+**Solution**:
+- Check main machine IP address is correct
+- Verify port 8765 is not blocked by firewall
+- Test with `telnet <main-ip> 8765`
+- Check coordinator logs for connection attempts
+
+#### No Frames Received
+
+**Symptom**: UI shows agent as "Connected" but no frame count increasing
+
+**Solution**:
+- Verify Minecraft is running on VM
+- Check screen capture region matches game window
+- Look for errors in VM client logs
+- Try lowering FPS (--fps 15)
+
+#### Actions Not Executing in Game
+
+**Symptom**: Model sends actions but character doesn't move
+
+**Solution**:
+- Verify pydirectinput is installed correctly
+- Check Minecraft window has focus
+- Disable "Raw Input" in Minecraft settings
+- Run VM client as administrator (Windows)
+
+#### Server Events Not Received
+
+**Symptom**: No HIT/DEATH events in logs
+
+**Solution**:
+- Verify server-side mod is installed
+- Check command bridge endpoint in mod config (should be localhost:9998 or main machine IP:9998)
+- Check server-side mod logs for errors
+- Test command bridge connectivity with `telnet <main-ip> 9998`
+- If using HMAC authentication (optional), verify `PVP_CMD_SECRET` environment variable matches on both sides
+
+#### Training Not Improving
+
+**Symptom**: Win rate stays at 50% or model doesn't learn
+
+**Solution**:
+- Increase training iterations (let it run longer)
+- Adjust reward schema (try higher terminal rewards)
+- Check for reward shaping issues (sum of rewards should correlate with wins)
+- Verify model is actually updating (check loss curves)
+- Try different learning rate or hyperparameters
+
+#### Out of Memory Errors
+
+**Symptom**: CUDA out of memory or system RAM exhausted
+
+**Solution**:
+- Reduce batch size in PPO trainer config
+- Lower FPS to reduce buffer fill rate
+- Enable gradient checkpointing
+- Use smaller model architecture
+- Train on CPU if GPU memory insufficient
+
+---
+
+### Advanced Configuration
+
+#### Hyperparameter Tuning
+
+Edit `python/server/backend/ppo_trainer.py`:
+
+```python
+# Learning rate
+lr = 3e-4  # Default, try 1e-4 for more stable training
+
+# PPO clip epsilon
+clip_epsilon = 0.2  # Default, try 0.1 for more conservative updates
+
+# GAE lambda
+gae_lambda = 0.95  # Default, try 0.99 for longer-term credit assignment
+
+# Entropy coefficient
+entropy_coef = 0.01  # Default, try 0.02 for more exploration
+```
+
+#### Custom Architectures
+
+Edit `python/server/backend/model.py` to modify the CNN architecture:
+
+```python
+# Default: 64x64 grayscale input, 3 conv layers
+# Customize layers, filters, activation functions
+```
+
+#### Distributed Training
+
+Run multiple main machines with different model instances, then merge checkpoints periodically for ensemble training.
+
+---
+
+### Command Reference
+
+**Main Machine**:
+```bash
+cd python/server
+python main.py                    # Start coordinator + trainer + UI (uses defaults)
+# Note: Configuration is currently hardcoded in manager.py
+# - Coordinator: 0.0.0.0:8765
+# - Command bridge: 127.0.0.1:9998
+# - Device: auto-detected (CUDA > MPS > CPU)
+```
+
+**VM Client**:
+```bash
+cd python/client
+python client.py --agent-id 1                              # Basic usage
+python client.py --server-url ws://192.168.1.100:8765/ws   # Remote server
+python client.py --fps 60 --width 640 --height 360        # High FPS + higher resolution
+python client.py --jpeg-quality 85                         # Higher quality frames
+python client.py --window-title-contains "Minecraft"       # Custom window detection
+```
+
+---
+
+### File Structure Reference
+
+```
+python/
+├── server/
+│   ├── main.py                 # Main machine entry point
+│   ├── requirements.txt        # Main machine dependencies
+│   ├── backend/
+│   │   ├── manager.py          # Service orchestrator
+│   │   ├── coordinator.py      # WebSocket coordinator
+│   │   ├── model.py            # CNN Actor-Critic
+│   │   ├── ppo_trainer.py      # PPO algorithm
+│   │   ├── command_bridge.py   # Event receiver (port 9998)
+│   │   ├── inference_engine.py # Model inference
+│   │   ├── session_registry.py # Agent session state
+│   │   └── device_manager.py   # GPU/CPU detection
+│   ├── frontend/
+│   │   ├── UI.py               # PyQt6 main window
+│   │   └── agent_controller.py # Agent panel widgets
+│   └── tests/
+│       └── ...                 # Server-side tests
+├── client/
+│   ├── client.py               # VM client entry point
+│   ├── requirements.txt        # VM client dependencies
+│   └── vm_client/
+│       ├── runtime.py          # Main event loop
+│       ├── capture.py          # Screen capture (mss)
+│       ├── preprocess.py       # Grayscale + JPEG
+│       ├── input_driver.py     # pydirectinput wrapper
+│       └── ws_client.py        # WebSocket client
+└── ACTIVE_PATHS.md             # Active vs legacy code guide
+```
+
+**Key Files**:
+- `server/backend/manager.py`: Initializes all services, entry point from `server/main.py`
+- `server/backend/coordinator.py`: Handles WebSocket sessions, frame/action routing
+- `server/backend/ppo_trainer.py`: PPO algorithm, experience buffer, model updates
+- `client/vm_client/runtime.py`: VM client main loop (capture → send → receive → execute)
+
+**Legacy Files** (in `archive/`):
+- `training_loop.py`: Old direct IPC approach (deprecated)
+- Do not modify! See `ACTIVE_PATHS.md` for guidance
+
+---
+
+### Next Steps
+
+1. **Complete Bootstrapping**: Train against human opponents until agents show basic combat competence
+2. **Switch to Self-Play**: Update reward schema to Phase 2 values (high terminal rewards + time penalty)
+3. **Monitor for Convergence**: Watch win rate, episode length, reward curves
+4. **Validate Against Humans**: Periodically test agents against human players to ensure strategies generalize
+5. **Iterate**: Adjust rewards, architectures, hyperparameters based on observed behavior
+
+For detailed protocol specifications, see the **Protocol v1 Contract** at the top of this document.
+
+For code structure clarification, see `python/ACTIVE_PATHS.md`.
+
+For additional context, see the root [README.md](../README.md).
+
+---
+
+**End of Training Guide**

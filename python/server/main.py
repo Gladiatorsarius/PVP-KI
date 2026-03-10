@@ -9,11 +9,11 @@ import torch
 from PyQt6.QtWidgets import QApplication
 
 try:
-    # package-style imports (when running `python -m python.main`)
+    # package-style imports (when running `python -m server.main`)
     from .frontend.UI import MainWindow
     from .backend.manager import Manager
 except Exception:
-    # script-style imports (when running `python python/main.py`)
+    # script-style imports (when running `python main.py` from `python/server`)
     from frontend.UI import MainWindow
     from backend.manager import Manager
 

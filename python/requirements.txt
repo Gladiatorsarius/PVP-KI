@@ -1,11 +1,3 @@
-PyQt6
-opencv-python
-# For CUDA 11.8 support: pip install -r requirements.txt --index-url https://download.pytorch.org/whl/cu118
-torch>=2.7.0
-numpy
-Pillow
-pytest
-websockets
-mss
-pydirectinput
-PyGetWindow
+# Split by deployment target:
+# - Main machine: pip install -r server/requirements.txt
+# - VM client:    pip install -r client/requirements.txt

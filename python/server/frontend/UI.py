@@ -4,7 +4,7 @@ from PyQt6.QtCore import QTimer
 try:
     from .agent_controller import AgentControllerQt
 except Exception:
-    from python.frontend.agent_controller import AgentControllerQt
+    from frontend.agent_controller import AgentControllerQt
 
 class MainWindow(QMainWindow):
     def __init__(self, manager=None):

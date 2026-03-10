@@ -5,6 +5,7 @@ import threading
 import time
 import uuid
 from typing import Any, Callable, Dict, Optional
+from concurrent.futures import ThreadPoolExecutor
 
 from .session_registry import SessionRegistry
 from .ws_protocol_v1 import PROTOCOL_VERSION, default_action_payload, validate_incoming_message
@@ -13,12 +14,29 @@ log = logging.getLogger(__name__)
 
 
 class WebSocketCoordinator:
-    def __init__(self, host: str = '0.0.0.0', port: int = 8765, path: str = '/ws', status_hook: Optional[Callable[[Dict[str, Any]], None]] = None):
+    def __init__(self, 
+                 host: str = '0.0.0.0', 
+                 port: int = 8765, 
+                 path: str = '/ws', 
+                 status_hook: Optional[Callable[[Dict[str, Any]], None]] = None,
+                 inference_engine = None,
+                 inference_executor: Optional[ThreadPoolExecutor] = None,
+                 model_lock: Optional[threading.RLock] = None):
         self.host = host
         self.port = port
         self.path = path
         self.status_hook = status_hook
         self.registry = SessionRegistry()
+
+        # Inference dependencies
+        self.inference_engine = inference_engine
+        self.inference_executor = inference_executor
+        self.model_lock = model_lock
+
+        # Fallback mechanism for inference failures
+        self._inference_failure_count = 0
+        self._fallback_mode = False
+        self._fallback_timer = None
 
         self._thread = None
         self._loop = None
@@ -204,12 +222,27 @@ class WebSocketCoordinator:
             return
         self._emit_status('agent_ready', agent_id=agent_id)
 
+    def _run_inference_locked(self, payload_b64: str, agent_id: int):
+        """
+        Run inference in a thread-safe manner.
+        This function is executed in the inference executor thread.
+        """
+        with self.model_lock:
+            return self.inference_engine.predict(payload_b64)
+
+    def _reset_fallback(self):
+        """Reset the fallback mode after 60 seconds."""
+        log.info("Resetting inference fallback mode.")
+        self._fallback_mode = False
+        self._inference_failure_count = 0
+
     async def _handle_frame(self, websocket, message: Dict[str, Any]):
         agent_id = int(message['agent_id'])
         frame_id = int(message['frame_id'])
         timestamp_ms = int(message['timestamp_ms'])
         session_id = str(message['session_id'])
         episode_id = str(message['episode_id'])
+        payload_b64 = message.get('payload_b64', '')
 
         state = self.registry.mark_frame(
             agent_id=agent_id,
@@ -232,14 +265,72 @@ class WebSocketCoordinator:
 
         action_id = self.registry.next_action_id(agent_id)
 
-        # TODO(PPO-HOOK): Replace deterministic default action with PPO inference path.
-        action = default_action_payload(
-            session_id=state.session_id,
-            agent_id=agent_id,
-            episode_id=state.episode_id,
-            action_id=action_id,
-            timestamp_ms=int(time.time() * 1000),
-        )
+        # --- INFERENCE INTEGRATION ---
+        # If fallback mode is active, skip inference and use default actions
+        if self._fallback_mode:
+            action = default_action_payload(
+                session_id=state.session_id,
+                agent_id=agent_id,
+                episode_id=state.episode_id,
+                action_id=action_id,
+                timestamp_ms=int(time.time() * 1000),
+            )
+        elif self.inference_engine and self.inference_executor:
+            # Validate payload size to prevent DoS
+            MAX_PAYLOAD_LENGTH = 1_000_000  # 1MB base64 encoded
+            if len(payload_b64) > MAX_PAYLOAD_LENGTH:
+                await self._send_error(websocket, 'payload_too_large', agent_id=agent_id)
+                return
+
+            try:
+                # Offload GPU inference to a dedicated thread to avoid blocking asyncio
+                loop = asyncio.get_event_loop()
+                action = await loop.run_in_executor(
+                    self.inference_executor,
+                    self._run_inference_locked,
+                    payload_b64,
+                    agent_id
+                )
+                # Add protocol fields to the action
+                action['session_id'] = state.session_id
+                action['agent_id'] = agent_id
+                action['episode_id'] = state.episode_id
+                action['action_id'] = action_id
+                action['timestamp_ms'] = int(time.time() * 1000)
+                
+                # Reset failure counter on successful inference
+                self._inference_failure_count = 0
+
+            except Exception as e:
+                log.error(f"Inference failed for agent {agent_id}: {e}", exc_info=True)
+                self._inference_failure_count += 1
+                
+                # Activate fallback mode after 3 consecutive failures
+                if self._inference_failure_count >= 3:
+                    log.error("Entering fallback mode after 3 consecutive inference failures.")
+                    self._fallback_mode = True
+                    if self._fallback_timer:
+                        self._fallback_timer.cancel()
+                    self._fallback_timer = threading.Timer(60, self._reset_fallback)
+                    self._fallback_timer.start()
+
+                # Return default action on inference failure
+                action = default_action_payload(
+                    session_id=state.session_id,
+                    agent_id=agent_id,
+                    episode_id=state.episode_id,
+                    action_id=action_id,
+                    timestamp_ms=int(time.time() * 1000),
+                )
+        else:
+            # No inference engine available, use default actions
+            action = default_action_payload(
+                session_id=state.session_id,
+                agent_id=agent_id,
+                episode_id=state.episode_id,
+                action_id=action_id,
+                timestamp_ms=int(time.time() * 1000),
+            )
 
         await websocket.send(json.dumps(action))
         self._emit_status('frame_processed', agent_id=agent_id, frame_id=frame_id, action_id=action_id)

@@ -11,14 +11,15 @@ PVP-KI is a hybrid project combining Java and Python components to create an adv
 - **Documentation:** Training guides, plans, and summaries for AI development and mod integration.
 
 ## Protocol v1 Quick Start
-1. Install Python dependencies from [python/requirements.txt](python/requirements.txt).
-2. Start main machine runtime:
-   - `cd python`
+1. On the main machine, install [python/server/requirements.txt](python/server/requirements.txt).
+2. On each VM, install [python/client/requirements.txt](python/client/requirements.txt).
+3. Start main machine runtime:
+   - `cd python/server`
    - `python main.py`
-3. Start each VM runtime client:
-   - `cd python`
+4. Start each VM runtime client:
+   - `cd python/client`
    - `python client.py --server-url ws://<main-host>:8765/ws --agent-id <N> --fps 30`
-4. In the UI, wait for clients to become ready and use **Start All**.
+5. In the UI, wait for clients to become ready and use **Start All**.
 
 Canonical contract and schemas are documented in [doc/TRAINING_GUIDE.md](doc/TRAINING_GUIDE.md) under `2026 CONTRACT FREEZE (AGENT 0) - PROTOCOL V1`.
 
@@ -30,10 +31,10 @@ The Java mod communicates with the Python backend via IPC, allowing real-time co
   - `src/client/java/com/example/`: Client-side logic, overlays, mixins
   - `src/main/java/com/example/`: Server-side logic, team/kit management, IPC
   - `src/main/resources/`: Mod configuration and assets
-- `python/`: Python AI agent, backend, and frontend
-  - `backend/`: Reinforcement learning, agent training, model management
-  - `frontend/`: Agent controller UI
-  - `archive/`: Legacy and experimental scripts
+- `python/`: Python runtime overview and shared documentation
+   - `server/`: Main machine runtime, model/training, UI, and tests
+   - `client/`: VM runtime client and lightweight dependencies
+   - `archive/`: Legacy and experimental scripts
 - `doc/`: Documentation and training guides
 
 ## Setup
@@ -51,11 +52,11 @@ The Java mod communicates with the Python backend via IPC, allowing real-time co
 1. Install Python 3.10+ and pip
 2. Create and activate a virtual environment:
    ```bash
-   cd python
+   cd python/server
    python -m venv venv
    source venv/bin/activate  # On Windows use: venv\Scripts\activate
    ```
-3. Install dependencies inside the virtual environment:
+3. Install main-machine dependencies inside the virtual environment:
    ```bash
    pip install -r requirements.txt
    ```
@@ -63,20 +64,21 @@ The Java mod communicates with the Python backend via IPC, allowing real-time co
    ```bash
    python main.py
    ```
-5. For training, refer to `doc/TRAINING_GUIDE.md` and use scripts in `python/backend/`
+5. For VMs, use `python/client/requirements.txt` and run `python/client/client.py`
+6. For training, refer to `doc/TRAINING_GUIDE.md` and use scripts in `python/server/backend/`
 
 ## Usage
 - Launch Minecraft with the mod installed
 - Start the Python backend for agent control and training
-- Use the UI in `python/frontend/UI.py` for agent management
-- For reinforcement learning, follow the steps in `doc/TRAINING_GUID.md`
-- Example: To start training, run `python/backend/ppo_trainer.py`
+- Use the UI in `python/server/frontend/UI.py` for agent management
+- For reinforcement learning, follow the steps in [doc/TRAINING_GUIDE.md](doc/TRAINING_GUIDE.md)
+- The training system starts automatically with `python/server/main.py` - no need to run individual scripts
 
 ## Documentation
 - Guides and plans: `doc/`
 - Java source: `pvp_ki-template-1.21.10/src/`
-- Python backend: `python/backend/`
-- Python frontend: `python/frontend/`
+- Python server runtime: `python/server/`
+- Python VM client runtime: `python/client/`
 
 ## Contributing
 Pull requests and issues are welcome. Please review the documentation, follow the project structure, and ensure code quality.

@@ -1,0 +1,6 @@
+websockets
+mss
+numpy
+opencv-python
+pydirectinput
+PyGetWindow

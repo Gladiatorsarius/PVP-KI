@@ -29,6 +29,10 @@ class PVPModel(nn.Module):
 
     def forward(self, x):
         # x: (Batch, 1, 64, 64) - Grayscale
+        # Input validation
+        if x.dim() != 4 or x.shape[1] != 1 or x.shape[2] != 64 or x.shape[3] != 64:
+            raise ValueError(f"Expected input shape (B, 1, 64, 64), but got {x.shape}")
+
         x = F.relu(self.conv1(x))
         x = F.relu(self.conv2(x))
         x = F.relu(self.conv3(x))
@@ -38,6 +42,7 @@ class PVPModel(nn.Module):
         
         move_logits = self.actor_move(x)
         look_delta = torch.tanh(self.actor_look(x)) * 10.0 # Scale look speed
+        look_delta = torch.nan_to_num(look_delta, nan=0.0) # Prevent NaN propagation
         value = self.critic(x)
         
         return move_logits, look_delta, value
