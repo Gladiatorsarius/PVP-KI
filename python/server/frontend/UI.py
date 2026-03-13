@@ -1,5 +1,5 @@
-from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QPushButton, QLabel, QHBoxLayout, QScrollArea, QGridLayout, QCheckBox, QLineEdit
-from PyQt6.QtCore import QTimer
+from PyQt6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QPushButton, QLabel, QHBoxLayout, QScrollArea, QGridLayout
+from PyQt6.QtCore import QTimer, pyqtSignal
 
 try:
     from .agent_controller import AgentControllerQt
@@ -7,6 +7,8 @@ except Exception:
     from frontend.agent_controller import AgentControllerQt
 
 class MainWindow(QMainWindow):
+    manager_status_signal = pyqtSignal(dict)
+
     def __init__(self, manager=None):
         super().__init__()
         self.setWindowTitle("Multi-Agent PVP Training")
@@ -18,23 +20,17 @@ class MainWindow(QMainWindow):
         main_layout = QVBoxLayout()
         main_widget.setLayout(main_layout)
 
-        # Add agent control buttons
+        # Global control buttons
         btn_layout = QHBoxLayout()
-        self.add_btn = QPushButton("+ Add Agent")
-        self.remove_btn = QPushButton("- Remove Last")
         self.hide_btn = QPushButton("Hide All")
         self.show_btn = QPushButton("Show All")
         self.start_all_btn = QPushButton("Start All")
-        btn_layout.addWidget(self.add_btn)
-        btn_layout.addWidget(self.remove_btn)
         btn_layout.addWidget(self.hide_btn)
         btn_layout.addWidget(self.show_btn)
         btn_layout.addWidget(self.start_all_btn)
         main_layout.addLayout(btn_layout)
         
         # Connect buttons
-        self.add_btn.clicked.connect(self.add_agent)
-        self.remove_btn.clicked.connect(self.remove_agent)
         self.hide_btn.clicked.connect(self.hide_all_agents)
         self.show_btn.clicked.connect(self.show_all_agents)
         self.start_all_btn.clicked.connect(self.start_all)
@@ -54,8 +50,9 @@ class MainWindow(QMainWindow):
         self.coordinator_label = QLabel("Coordinator: unknown")
         main_layout.addWidget(self.coordinator_label)
 
-        # Agent controllers list
+        # Agent controllers list + lookup
         self.agent_controllers = []
+        self.agent_controllers_by_id = {}
         self.manager = manager
         if self.manager is None:
             try:
@@ -63,6 +60,9 @@ class MainWindow(QMainWindow):
             except Exception:
                 from manager import Manager as _Manager
             self.manager = _Manager()
+
+        # Route backend thread status updates safely onto the Qt UI thread.
+        self.manager_status_signal.connect(self._handle_manager_status)
 
         # Manager status hooks for coordinator/log events
         try:
@@ -75,24 +75,75 @@ class MainWindow(QMainWindow):
         self._status_timer.timeout.connect(self._refresh_coordinator_status)
         self._status_timer.start()
 
-        # Add two agents by default
-        self.add_agent()
-        self.add_agent()
+    def add_agent(self, agent_id, session_id=None, episode_id=None):
+        try:
+            agent_id = int(agent_id)
+        except Exception:
+            return
 
-    def add_agent(self):
+        if agent_id in self.agent_controllers_by_id:
+            return
+
         idx = len(self.agent_controllers)
-        name = f"Agent {idx+1}"
-        port = 9999 + idx
-        backend = self.manager.create_agent(name, port, dummy=False)
-        agent = AgentControllerQt(name, port, backend_adapter=backend)
+        name = f"Agent {agent_id}"
+        # VM clients connect over the coordinator socket, not a per-agent local port.
+        coordinator_port = getattr(getattr(self.manager, '_coordinator', None), 'port', 0)
+        agent = AgentControllerQt(name, coordinator_port, backend_adapter=None)
+
+        # Keep widget read-only for coordinator-managed sessions.
+        try:
+            agent.start_btn.setEnabled(False)
+            agent.stop_btn.setEnabled(False)
+            agent.status_label.setText("Status: Connected")
+            if session_id or episode_id:
+                agent.log(f"Auto-registered: session={session_id} episode={episode_id}")
+            else:
+                agent.log("Auto-registered from VM client")
+        except Exception:
+            pass
+
         self.agent_controllers.append(agent)
-        self.agent_panel_layout.addWidget(agent, idx//3, idx%3)  # Arrange in 3 columns
+        self.agent_controllers_by_id[agent_id] = agent
+        self.agent_panel_layout.addWidget(agent, idx // 3, idx % 3)
 
-    def remove_agent(self):
-        if self.agent_controllers:
-            agent = self.agent_controllers.pop()
-            agent.setParent(None)
+    def remove_agent(self, agent_id):
+        try:
+            agent_id = int(agent_id)
+        except Exception:
+            return
 
+        agent = self.agent_controllers_by_id.pop(agent_id, None)
+        if not agent:
+            return
+
+        try:
+            self.agent_panel_layout.removeWidget(agent)
+        except Exception:
+            pass
+        if agent in self.agent_controllers:
+            self.agent_controllers.remove(agent)
+        agent.setParent(None)
+        agent.deleteLater()
+        self._reflow_agent_grid()
+
+    def _reflow_agent_grid(self):
+        for idx, agent in enumerate(self.agent_controllers):
+            self.agent_panel_layout.addWidget(agent, idx // 3, idx % 3)
+
+    def _set_agent_status(self, agent_id, text):
+        try:
+            agent_id = int(agent_id)
+        except Exception:
+            return
+        agent = self.agent_controllers_by_id.get(agent_id)
+        if not agent:
+            return
+        try:
+            agent.status_label.setText(text)
+            agent.log(text)
+        except Exception:
+            pass
+        
     def hide_all_agents(self):
         for agent in self.agent_controllers:
             agent._set_visible(False)
@@ -109,8 +160,28 @@ class MainWindow(QMainWindow):
             self.metrics_label.setText(f"Start-All failed: {exc}")
 
     def _on_manager_status(self, payload: dict):
+        # Called by manager/coordinator worker threads.
+        try:
+            self.manager_status_signal.emit(payload if isinstance(payload, dict) else {})
+        except Exception:
+            pass
+
+    def _handle_manager_status(self, payload: dict):
         event_type = payload.get('type', 'unknown') if isinstance(payload, dict) else 'unknown'
         self.coordinator_label.setText(f"Coordinator event: {event_type}")
+
+        if event_type == 'agent_registered':
+            self.add_agent(
+                agent_id=payload.get('agent_id'),
+                session_id=payload.get('session_id'),
+                episode_id=payload.get('episode_id'),
+            )
+        elif event_type == 'agent_disconnected':
+            self.remove_agent(payload.get('agent_id'))
+        elif event_type == 'agent_ready':
+            self._set_agent_status(payload.get('agent_id'), 'Status: Ready')
+        elif event_type == 'start_sent':
+            self._set_agent_status(payload.get('agent_id'), 'Status: Running')
 
     def _refresh_coordinator_status(self):
         try:
@@ -118,6 +189,11 @@ class MainWindow(QMainWindow):
             if not snapshot:
                 self.coordinator_label.setText("Coordinator: no agent sessions")
                 return
+
+            # Backfill UI widgets in case events were missed before UI listener binding.
+            for agent_id, item in snapshot.items():
+                self.add_agent(agent_id=agent_id, session_id=item.get('session_id'), episode_id=item.get('episode_id'))
+
             ready = sum(1 for item in snapshot.values() if item.get('state') == 'ready')
             running = sum(1 for item in snapshot.values() if item.get('state') == 'running')
             self.coordinator_label.setText(f"Coordinator: sessions={len(snapshot)} ready={ready} running={running}")
